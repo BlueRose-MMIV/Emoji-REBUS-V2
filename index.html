@@ -2179,7 +2179,7 @@
                 clearTimeout(R.onlineRewardTimeout);
                 R.onlineRewardTimeout=null;
                 R.streakRewardPending=false;
-                R.streakRewardKey=`${state.activeTurn}:${state.teamA.streak}:${state.currentPuzzleIndex}`;
+                R.streakRewardKey='';
                 playSFX('click'); updateScoresUI();
                 if(typeof window.sendState==='function') window.sendState();
                 clearTimeout(R.onlineAdvanceTimer);
@@ -2639,9 +2639,26 @@
                     hangmanHearts:state.hangmanHearts,hangmanGuessedLetters:[...state.hangmanGuessedLetters],hangmanHintUsed:state.hangmanHintUsed,quizHintUsed:state.quizHintUsed,
                     questionTimeLeft:state.questionTimeLeft,globalTimeLeft:state.globalTimeLeft,streakRisk:state.streakRisk,streakRewardKey:N.streakRewardKey||'',streakRewardPending:!!N.streakRewardPending,baseTimerDuration:state.baseTimerDuration,matchDurationMinutes:state.matchDurationMinutes,phase:N.phase,onlineFeedback:N.onlineFeedback};
             }
-            function confirmOnlineManualNext(label){
-                if(!(N.role==='host'||N.role==='client')||N.phase!=='playing'||!state.questionAnswered)return true;
-                return window.confirm(`เปลี่ยนข้อ ${label} ทันทีหรือไม่?\n\nระบบจะแสดงเฉลยให้อัตโนมัติประมาณ 3 วินาทีแล้วข้ามให้เอง หากเลือก OK จะข้ามทันที`);
+            let onlineManualNextPending = null;
+            function ensureOnlineNextConfirm(){
+                let m=document.getElementById('online-next-confirm-modal');
+                if(m) return m;
+                m=document.createElement('div');
+                m.id='online-next-confirm-modal';
+                m.className='hidden fixed inset-0 z-[180] flex items-center justify-center bg-slate-900/80 p-4';
+                m.innerHTML=`<div class="solid-card bg-white p-5 max-w-sm w-full text-center border-4 border-slate-900"><div class="text-3xl mb-2">⏭️</div><h3 id="online-next-title" class="text-lg font-black uppercase mb-2">Change question now?</h3><p class="text-xs font-bold text-slate-600 mb-4">The answer has been shown. Change the question immediately?</p><div class="flex gap-2"><button id="online-next-cancel" class="solid-btn bg-slate-200 text-slate-900 flex-1 py-2 font-black">CANCEL</button><button id="online-next-ok" class="solid-btn bg-yellow-400 text-slate-900 flex-1 py-2 font-black">CHANGE NOW</button></div></div>`;
+                document.body.appendChild(m);
+                m.querySelector('#online-next-cancel').onclick=()=>{onlineManualNextPending=null;m.classList.add('hidden');};
+                m.querySelector('#online-next-ok').onclick=()=>{const fn=onlineManualNextPending;onlineManualNextPending=null;m.classList.add('hidden');if(typeof fn==='function')fn();};
+                return m;
+            }
+            function confirmOnlineManualNext(label,onConfirm){
+                if(!(N.role==='host'||N.role==='client')||N.phase!=='playing'||!state.questionAnswered){ if(typeof onConfirm==='function')onConfirm(); return; }
+                const m=ensureOnlineNextConfirm();
+                const t=m.querySelector('#online-next-title');
+                if(t)t.textContent=`CHANGE ${label.toUpperCase()} QUESTION NOW?`;
+                onlineManualNextPending=onConfirm;
+                m.classList.remove('hidden');
             }
 
             function clearOnlineAutoAdvance(){
@@ -2727,7 +2744,7 @@
                     N.streakRewardPending = s.streakRewardPending;
                 }
                 if (s.streakRewardPending && state.mode === 'team' && N.phase !== 'ended' && N.streakRewardKey) {
-                    const winningTeam = state.activeTurn;
+                    const winningTeam = String(N.streakRewardKey).split(':')[0];
                     if (N.role === 'client' && N.team === winningTeam) {
                         triggerStreakRewardModal();
                     }
@@ -2945,6 +2962,8 @@
             function valid(a){return !!(a&&ACTIONS.includes(a.t));}
             function applyStreakRewardRemote(type) {
                 if(!N.streakRewardPending || !['steal','debuffTime','nextQuestionBonus'].includes(type))return;
+                const ownerTeam = getStreakRewardOwnerTeam();
+                if(ownerTeam !== state.activeTurn) return;
                 const activeTeam = state.activeTurn === 'a' ? state.teamA : state.teamB;
                 const oppTeam = state.activeTurn === 'a' ? state.teamB : state.teamA;
                 if (type === 'steal') {
@@ -2958,6 +2977,25 @@
                 }
                 closeStreakRewardModal();
                 N.streakRewardPending=false;
+                N.streakRewardKey='';
+                N.streakRewardBusy=false;
+                // The original auto-advance timer was cancelled when the reward opened.
+                // Re-arm it after a remote owner (e.g. Join/Red) selects a reward so the
+                // Host continues the match instead of stalling on the resolved puzzle.
+                clearTimeout(N.onlineAdvanceTimer);
+                N.onlineAdvanceTimer=setTimeout(()=>{
+                    if(N.destroying||N.role!=='host'||N.phase!=='playing'||!state.questionAnswered)return;
+                    const tab=state.activeTab;
+                    N.remote=true;
+                    try {
+                        if(tab==='hangman')O.nextHangman();
+                        else if(tab==='play')O.nextQuiz();
+                    } finally { N.remote=false; }
+                    N.onlineFeedback=null;
+                    N.onlineAdvanceTimer=null;
+                    if(typeof window.sendState==='function') window.sendState();
+                },3000);
+                if(typeof window.sendState==='function') window.sendState();
             }
             function run(a){
                 if(a.t==='nextHangman'||a.t==='nextQuiz')clearOnlineAutoAdvance();
@@ -3020,15 +3058,24 @@
             }
             window.onlineSendAct = sendAct;
             window.handleHangmanGuess=function(v){if((N.role==='client'||N.role==='host')&&!N.remote&&N.phase==='playing'){if(N.team!==state.activeTurn)return;sendAct({t:'hangmanGuess',v});return;}const before=state.questionAnswered;const r=O.handleHangmanGuess.apply(this,arguments);if(N.role==='host'&&!N.remote&&!before&&state.questionAnswered)markOnlineQuestionResolved('hangmanGuess');if(N.role==='host'&&!N.remote)sendState();return r;};
-            window.nextHangman=function(){if(!N.remote&&N.phase==='playing'&&(N.role==='client'||N.role==='host')){if(N.team!==state.activeTurn)return;if(!confirmOnlineManualNext('Hangman'))return;sendAct({t:'nextHangman'});return;}clearOnlineAutoAdvance();const r=O.nextHangman.apply(this,arguments);if(N.role==='host'&&!N.remote)sendState();return r;};
+            window.nextHangman=function(){if(!N.remote&&N.phase==='playing'&&(N.role==='client'||N.role==='host')){if(N.team!==state.activeTurn)return;confirmOnlineManualNext('Hangman',()=>sendAct({t:'nextHangman'}));return;}clearOnlineAutoAdvance();const r=O.nextHangman.apply(this,arguments);if(N.role==='host'&&!N.remote)sendState();return r;};
             window.giveHangmanHint=function(){if(!N.remote&&N.phase==='playing'&&(N.role==='client'||N.role==='host')){if(N.team!==state.activeTurn)return;sendAct({t:'hintHangman'});return;}const r=O.giveHangmanHint.apply(this,arguments);if(N.role==='host'&&!N.remote)sendState();return r;};
             window.skipHangmanPuzzle=function(){if(!N.remote&&N.phase==='playing'&&(N.role==='client'||N.role==='host')){if(N.team!==state.activeTurn)return;sendAct({t:'skipHangman'});return;}const r=O.skipHangmanPuzzle.apply(this,arguments);if(N.role==='host'&&!N.remote)sendState();return r;};
             window.handleQuizSubmit=function(e){if((N.role==='client'||N.role==='host')&&!N.remote&&N.phase==='playing'){e.preventDefault();if(N.team!==state.activeTurn)return;sendAct({t:'quizSubmit',v:document.getElementById('quiz-input')?.value||''});return;}const before=state.questionAnswered;const r=O.handleQuizSubmit.apply(this,arguments);if(N.role==='host'&&!N.remote){if(!before&&!state.questionAnswered)N.quizResetVersion++;if(!before&&state.questionAnswered)markOnlineQuestionResolved('quizSubmit');sendState();}return r;};
-            window.nextQuiz=function(){if(!N.remote&&N.phase==='playing'&&(N.role==='client'||N.role==='host')&&N.team===state.activeTurn){if(!confirmOnlineManualNext('Quiz'))return;sendAct({t:'nextQuiz'});return;}clearOnlineAutoAdvance();const r=O.nextQuiz.apply(this,arguments);if(N.role==='host'&&!N.remote)sendState();return r;};
+            window.nextQuiz=function(){if(!N.remote&&N.phase==='playing'&&(N.role==='client'||N.role==='host')&&N.team===state.activeTurn){confirmOnlineManualNext('Quiz',()=>sendAct({t:'nextQuiz'}));return;}clearOnlineAutoAdvance();const r=O.nextQuiz.apply(this,arguments);if(N.role==='host'&&!N.remote)sendState();return r;};
             window.giveQuizHint=function(){if(!N.remote&&N.phase==='playing'&&(N.role==='client'||N.role==='host')){if(N.team!==state.activeTurn)return;sendAct({t:'hintQuiz'});return;}const r=O.giveQuizHint.apply(this,arguments);if(N.role==='host'&&!N.remote)sendState();return r;};
             window.revealQuizAnswer=function(){if(!N.remote&&N.phase==='playing'&&(N.role==='client'||N.role==='host')){if(N.team!==state.activeTurn)return;sendAct({t:'revealQuiz'});return;}const before=state.questionAnswered;const r=O.revealQuizAnswer.apply(this,arguments);if(N.role==='host'&&!N.remote&&!before&&state.questionAnswered)markOnlineQuestionResolved('revealQuiz');if(N.role==='host'&&!N.remote)sendState();return r;};
             window.skipQuizPuzzle=function(){if(!N.remote&&N.phase==='playing'&&(N.role==='client'||N.role==='host')){if(N.team!==state.activeTurn)return;sendAct({t:'skipQuiz'});return;}const r=O.skipQuizPuzzle.apply(this,arguments);if(N.role==='host'&&!N.remote)sendState();return r;};
-            window.setTeamTurn=function(v){if(!N.remote&&N.phase==='playing'&&(N.role==='client'||N.role==='host')){sendAct({t:'setTurn',v});return;}const r=O.setTeamTurn.apply(this,arguments);if(N.role==='host'&&!N.remote)sendState();return r;};
+            window.setTeamTurn=function(v){
+                if(!N.remote&&N.phase==='playing'&&(N.role==='client'||N.role==='host')){
+                    // Online turns are authoritative and advance automatically after each resolved question.
+                    // Do not allow manual team switching, which could bypass turn order/streak challenges.
+                    return;
+                }
+                const r=O.setTeamTurn.apply(this,arguments);
+                if(N.role==='host'&&!N.remote)sendState();
+                return r;
+            };
             window.applyStreakReward=function(v){return O.applyStreakReward.apply(this,arguments);};
             window.handleQuestionTimeout=function(){
                 // Timeout is authoritative and driven by the Host's local question timer.
