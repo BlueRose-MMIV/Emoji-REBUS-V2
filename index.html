@@ -1099,7 +1099,8 @@
                     part2: item[1],
                     answer: item[2],
                     category: item[3],
-                    hint: item[4]
+                    hint: item[4],
+                    meaning: item[4]
                 });
             }
         });
@@ -1760,7 +1761,7 @@
                 stopCurrentQuestionTimer();
                 playSFX('correct');
                 addScore(1);
-                showHangmanFeedback(true, `🎉 PERFECT! Word was "${puzzle.answer}"`);
+                showHangmanFeedback(true, answerRevealText(puzzle, '🎉 PERFECT!'));
             }
         }
 
@@ -1782,12 +1783,28 @@
                     stopCurrentQuestionTimer();
                     resetStreakForActivePlayer();
                     resolveNextQuestionChallenge(false);
-                    showHangmanFeedback(false, `💔 OUT OF HEARTS! Answer was "${puzzle.answer}"`);
+                    showHangmanFeedback(false, answerRevealText(puzzle, '💔 OUT OF HEARTS!'));
                 }
             }
 
             renderHangmanWordSlots();
             renderQWERTYKeycaps();
+        }
+
+        function getPuzzleMeaning(puzzle) {
+            return String((puzzle && (puzzle.meaning ?? puzzle.hint)) || '').trim();
+        }
+
+        function answerRevealText(puzzle, prefix='') {
+            const meaning = getPuzzleMeaning(puzzle);
+            const lead = String(prefix || '').trim();
+            return meaning ? `${lead}${lead ? '\n' : ''}${puzzle.answer}\nMeaning: ${meaning}` : `${lead}${lead ? '\n' : ''}${puzzle.answer}`;
+        }
+
+        function setFeedbackContent(contentEl, text) {
+            if (!contentEl) return;
+            contentEl.textContent = text;
+            contentEl.classList.add('whitespace-pre-line');
         }
 
         function showHangmanFeedback(isSuccess, text) {
@@ -1799,7 +1816,7 @@
             } else {
                 overlay.className = "absolute inset-x-3 sm:inset-x-8 top-1/2 -translate-y-1/2 z-30 py-4 px-5 rounded-2xl font-black text-base sm:text-xl border-4 border-slate-900 shadow-[6px_6px_0px_0px_#0f172a] animate-pop text-center flex flex-col items-center justify-center gap-3 bg-red-400 text-white";
             }
-            content.textContent = text;
+            setFeedbackContent(content, text);
             overlay.classList.remove('hidden');
         }
 
@@ -1853,7 +1870,7 @@
                 stopCurrentQuestionTimer();
                 playSFX('correct');
                 addScore(1);
-                showQuizFeedback(true, `🎉 CORRECT!`);
+                showQuizFeedback(true, answerRevealText(puzzle, '🎉 CORRECT!'));
             } else {
                 playSFX('wrong');
                 inputEl.value = '';
@@ -1909,7 +1926,7 @@
             } else {
                 overlay.className = "absolute inset-x-3 sm:inset-x-8 top-1/2 -translate-y-1/2 z-30 py-4 px-5 rounded-2xl font-black text-base sm:text-xl border-4 border-slate-900 shadow-[6px_6px_0px_0px_#0f172a] animate-pop text-center flex flex-col items-center justify-center gap-3 bg-amber-400 text-slate-900";
             }
-            content.textContent = text;
+            setFeedbackContent(content, text);
             overlay.classList.remove('hidden');
         }
 
@@ -1953,7 +1970,7 @@
             const puzzle = puzzles[state.currentPuzzleIndex];
             document.getElementById('quiz-input').value = puzzle.answer;
             renderQuizTypedBoxes();
-            showQuizFeedback(false, `Answer Revealed: ${puzzle.answer}`);
+            showQuizFeedback(false, answerRevealText(puzzle, 'Answer Revealed:'));
         }
 
         function skipQuizPuzzle() {
@@ -2269,8 +2286,8 @@
             resetStreakForActivePlayer();
             resolveNextQuestionChallenge(false);
             const puzzle = puzzles[state.currentPuzzleIndex];
-            if (state.activeTab === 'hangman') showHangmanFeedback(false, `⏰ TIME'S UP! Answer: ${puzzle.answer}`);
-            else if (state.activeTab === 'play') showQuizFeedback(false, `⏰ TIME'S UP! Answer: ${puzzle.answer}`);
+            if (state.activeTab === 'hangman') showHangmanFeedback(false, answerRevealText(puzzle, "⏰ TIME'S UP!"));
+            else if (state.activeTab === 'play') showQuizFeedback(false, answerRevealText(puzzle, "⏰ TIME'S UP!"));
         }
 
         function updateQuestionTimerDisplay() {
@@ -2323,7 +2340,8 @@
 
             document.getElementById('slide-category-header').textContent = `CATEGORY: ${puzzle.category}`;
             state.vocabSlideAnswerRevealed = false;
-            document.getElementById('slide-answer-container').textContent = puzzle.answer;
+            const meaning = getPuzzleMeaning(puzzle);
+            document.getElementById('slide-answer-container').innerHTML = `<div>${esc(puzzle.answer)}</div>${meaning ? `<div class="text-xs sm:text-sm md:text-base font-bold text-white/80 mt-1 tracking-normal">${esc(meaning)}</div>` : ''}`;
             document.getElementById('slide-answer-container').classList.add('hidden');
             document.getElementById('slide-prompt-text').classList.remove('hidden');
             document.getElementById('slide-question-mark').classList.remove('hidden');
@@ -2410,6 +2428,7 @@
                     <div class="text-xs font-bold text-slate-500 uppercase">${puzzle.category}</div>
                     <div class="text-2xl sm:text-3xl my-1">${puzzle.part1} + ${puzzle.part2}</div>
                     <div class="text-sm sm:text-base font-black text-blue-900 bg-blue-50 px-2 py-0.5 rounded border border-blue-200">${puzzle.answer}</div>
+                    <div class="text-[10px] sm:text-xs font-bold text-slate-600 px-1 leading-tight">${esc(getPuzzleMeaning(puzzle))}</div>
                 `;
                 container.appendChild(card);
             });
@@ -2474,7 +2493,7 @@
                 networkRecovering:false,recoveryCycle:0,hostConnToken:0,pendingActions:[],actionFlushTimer:null,onlineFeedback:null,onlineFeedbackVersion:0,onlineAdvanceTimer:null,onlineRewardTimeout:null,streakRewardPending:false,lastInputLockReason:'',iceGraceTimer:null,lastHostPathChangeAt:0
             };
             window.N = N;
-            const ACTIONS=['hangmanGuess','nextHangman','hintHangman','skipQuiz','quizSubmit','nextQuiz','hintQuiz','revealQuiz','skipHangman','setTurn','reward','timeout'];
+            const ACTIONS=['hangmanGuess','nextHangman','hintHangman','skipQuiz','quizSubmit','nextQuiz','hintQuiz','revealQuiz','skipHangman','setTurn','reward','confirmRevealQuiz','timeout'];
             const SYNC_INTERVAL=750, JOIN_HEARTBEAT=3000, MAX_JOIN_WAIT=30000, WATCHDOG_STALE=6000;
             const RECONNECT_BASE=1800, RECONNECT_MAX=14000, MAX_MESH_PEERS=6, RECOVERY_GRACE=4500, ICE_DISCONNECT_GRACE=6500, ACTION_QUEUE_MAX=12, HEARTBEAT_MS=3500;
             const PEER_ID_PREFIX='';
@@ -2691,18 +2710,18 @@
                 if(state.activeTab==='hangman'){
                     if(actionType==='timeout'){
                         ok=false;
-                        text=`⏰ TIME'S UP! Answer was "${puzzle.answer}"`;
+                        text=answerRevealText(puzzle, `⏰ TIME'S UP!`);
                     }else if(actionType==='revealHangman'){
                         ok=false;
-                        text=`Answer Revealed: ${puzzle.answer}`;
+                        text=answerRevealText(puzzle, 'Answer Revealed:');
                     }else{
                         ok=state.hangmanHearts>0;
-                        text=ok?`🎉 PERFECT! Word was "${puzzle.answer}"`:`💔 OUT OF HEARTS! Answer was "${puzzle.answer}"`;
+                        text=ok?answerRevealText(puzzle, '🎉 PERFECT!'):answerRevealText(puzzle, '💔 OUT OF HEARTS!');
                     }
                 }else{
-                    if(actionType==='revealQuiz')text=`Answer Revealed: ${puzzle.answer}`;
-                    else if(actionType==='timeout'){ok=false;text=`⏰ TIME'S UP! Answer: ${puzzle.answer}`;}
-                    else {ok=true;text='🎉 CORRECT!';}
+                    if(actionType==='revealQuiz')text=answerRevealText(puzzle, 'Answer Revealed:');
+                    else if(actionType==='timeout'){ok=false;text=answerRevealText(puzzle, `⏰ TIME'S UP!`);}
+                    else {ok=true;text=answerRevealText(puzzle, '🎉 CORRECT!');}
                 }
                 clearTimeout(N.onlineAdvanceTimer);
                 N.onlineFeedback={version:++N.onlineFeedbackVersion,tab:state.activeTab,ok,text};
@@ -3013,6 +3032,7 @@
                 else if(a.t==='nextQuiz')O.nextQuiz();
                 else if(a.t==='hintQuiz')O.giveQuizHint();
                 else if(a.t==='revealQuiz')O.revealQuizAnswer();
+                else if(a.t==='confirmRevealQuiz')O.confirmRevealAnswer();
                 else if(a.t==='skipQuiz')O.skipQuizPuzzle();
                 else if(a.t==='setTurn')O.setTeamTurn(a.v);
                 else if(a.t==='reward' && N.streakRewardPending)applyStreakRewardRemote(a.v);
@@ -3047,7 +3067,7 @@
                     quizInput.classList.toggle('cursor-not-allowed',shouldDisableInput);
                 }
             }
-            const O={};['handleHangmanGuess','nextHangman','giveHangmanHint','skipHangmanPuzzle','handleQuizSubmit','nextQuiz','giveQuizHint','revealQuizAnswer','skipQuizPuzzle','setTeamTurn','applyStreakReward','handleQuestionTimeout','endMatch'].forEach(n=>O[n]=window[n]);
+            const O={};['handleHangmanGuess','nextHangman','giveHangmanHint','skipHangmanPuzzle','handleQuizSubmit','nextQuiz','giveQuizHint','revealQuizAnswer','skipQuizPuzzle','setTeamTurn','applyStreakReward','handleQuestionTimeout','endMatch','confirmRevealAnswer'].forEach(n=>O[n]=window[n]);
             window.O = O;
             function sendAct(a,fromQueue=false){
                 if(!(N.started&&N.phase==='playing'&&N.team===state.activeTurn))return false;
@@ -3067,6 +3087,16 @@
             window.giveHangmanHint=function(){if(!N.remote&&N.phase==='playing'&&(N.role==='client'||N.role==='host')){if(N.team!==state.activeTurn)return;sendAct({t:'hintHangman'});return;}const r=O.giveHangmanHint.apply(this,arguments);if(N.role==='host'&&!N.remote)sendState();return r;};
             window.skipHangmanPuzzle=function(){if(!N.remote&&N.phase==='playing'&&(N.role==='client'||N.role==='host')){if(N.team!==state.activeTurn)return;sendAct({t:'skipHangman'});return;}const r=O.skipHangmanPuzzle.apply(this,arguments);if(N.role==='host'&&!N.remote)sendState();return r;};
             window.handleQuizSubmit=function(e){if((N.role==='client'||N.role==='host')&&!N.remote&&N.phase==='playing'){e.preventDefault();if(N.team!==state.activeTurn)return;sendAct({t:'quizSubmit',v:document.getElementById('quiz-input')?.value||''});return;}const before=state.questionAnswered;const r=O.handleQuizSubmit.apply(this,arguments);if(N.role==='host'&&!N.remote){if(!before&&!state.questionAnswered)N.quizResetVersion++;if(!before&&state.questionAnswered)markOnlineQuestionResolved('quizSubmit');sendState();}return r;};
+            window.confirmRevealAnswer=function(){
+                if((N.role==='client'||N.role==='host')&&!N.remote&&N.phase==='playing'){
+                    if(N.team!==state.activeTurn)return;
+                    const sent=sendAct({t:'confirmRevealQuiz'});
+                    if(sent) document.getElementById('reveal-confirm-modal')?.classList.add('hidden');
+                    else document.getElementById('reveal-confirm-modal')?.classList.add('hidden');
+                    return;
+                }
+                return O.confirmRevealAnswer.apply(this,arguments);
+            };
             window.nextQuiz=function(){if(!N.remote&&N.phase==='playing'&&(N.role==='client'||N.role==='host')&&N.team===state.activeTurn){confirmOnlineManualNext('Quiz',()=>sendAct({t:'nextQuiz'}));return;}clearOnlineAutoAdvance();const r=O.nextQuiz.apply(this,arguments);if(N.role==='host'&&!N.remote)sendState();return r;};
             window.giveQuizHint=function(){if(!N.remote&&N.phase==='playing'&&(N.role==='client'||N.role==='host')){if(N.team!==state.activeTurn)return;sendAct({t:'hintQuiz'});return;}const r=O.giveQuizHint.apply(this,arguments);if(N.role==='host'&&!N.remote)sendState();return r;};
             window.revealQuizAnswer=function(){if(!N.remote&&N.phase==='playing'&&(N.role==='client'||N.role==='host')){if(N.team!==state.activeTurn)return;sendAct({t:'revealQuiz'});return;}const before=state.questionAnswered;const r=O.revealQuizAnswer.apply(this,arguments);if(N.role==='host'&&!N.remote&&!before&&state.questionAnswered)markOnlineQuestionResolved('revealQuiz');if(N.role==='host'&&!N.remote)sendState();return r;};
