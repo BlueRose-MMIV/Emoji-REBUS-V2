@@ -2746,7 +2746,19 @@
             function sendState(){
                 if(N.role!=='host'||N.mesh.size===0)return;N.seq++;const payload={type:'state',state:pack(),started:N.started,phase:N.phase,seq:N.seq,serverTs:Date.now()};broadcastMesh(payload);N.lastSnapshotAt=Date.now();
             }
-            function startHostTimers(){clearInterval(N.clock);N.clock=setInterval(()=>{if(N.started)sendState();},SYNC_INTERVAL);}
+            function startHostTimers(){
+                clearInterval(N.clock);
+                N.clock=setInterval(()=>{
+                    if(!N.started||N.phase!=='playing')return;
+                    // The Host is the authoritative clock. Keep the normal UI timer as-is,
+                    // but also guard against a timer callback being swallowed by a turn gate
+                    // or a transient network/recovery path. Resolve exactly once.
+                    if(!state.questionAnswered && Number(state.questionTimeLeft)<=0){
+                        window.handleQuestionTimeout();
+                    }
+                    sendState();
+                },SYNC_INTERVAL);
+            }
             function startClientWatchdog(){
                 clearInterval(N.clientWatchdog);
                 N.clientWatchdog=setInterval(()=>{
@@ -2871,7 +2883,26 @@
             window.skipQuizPuzzle=function(){if(!N.remote&&N.phase==='playing'&&(N.role==='client'||N.role==='host')){if(N.team!==state.activeTurn)return;sendAct({t:'skipQuiz'});return;}const r=O.skipQuizPuzzle.apply(this,arguments);if(N.role==='host'&&!N.remote)sendState();return r;};
             window.setTeamTurn=function(v){if(!N.remote&&N.phase==='playing'&&(N.role==='client'||N.role==='host')){sendAct({t:'setTurn',v});return;}const r=O.setTeamTurn.apply(this,arguments);if(N.role==='host'&&!N.remote)sendState();return r;};
             window.applyStreakReward=function(v){if(!N.remote&&N.phase==='playing'&&(N.role==='client'||N.role==='host')){sendAct({t:'reward',v});return;}const r=O.applyStreakReward.apply(this,arguments);if(N.role==='host'&&!N.remote)sendState();return r;};
-            window.handleQuestionTimeout=function(){if(!N.remote&&N.phase==='playing'&&(N.role==='client'||N.role==='host')){sendAct({t:'timeout'});return;}const before=state.questionAnswered;const r=O.handleQuestionTimeout.apply(this,arguments);if(N.role==='host'&&!N.remote&&!before&&state.questionAnswered)markOnlineQuestionResolved('timeout');if(N.role==='host'&&!N.remote)sendState();return r;};
+            window.handleQuestionTimeout=function(){
+                // Timeout is authoritative and driven by the Host's local question timer.
+                // Do NOT gate the Host timeout by Host team ownership: when Red is active,
+                // Host (Blue) still owns the authoritative clock and must resolve the timeout.
+                if(N.role==='host'&&!N.remote&&N.phase==='playing'){
+                    const before=state.questionAnswered;
+                    const r=O.handleQuestionTimeout.apply(this,arguments);
+                    if(!before&&state.questionAnswered)markOnlineQuestionResolved('timeout');
+                    sendState();
+                    return r;
+                }
+                // Clients do not own the authoritative question timer. Keep this path only
+                // as a defensive no-op in case an old/local timer callback fires during recovery.
+                if(N.role==='client'&&!N.remote&&N.phase==='playing')return;
+                const before=state.questionAnswered;
+                const r=O.handleQuestionTimeout.apply(this,arguments);
+                if(N.role==='host'&&!N.remote&&!before&&state.questionAnswered)markOnlineQuestionResolved('timeout');
+                if(N.role==='host'&&!N.remote)sendState();
+                return r;
+            };
             window.endMatch=function(){const r=O.endMatch.apply(this,arguments);if(N.role==='host'&&!N.remote){N.phase='ended';N.started=false;stopCurrentQuestionTimer();clearInterval(N.clock);sendState();}return r;};
         
             function acceptRemoteAction(payload){
