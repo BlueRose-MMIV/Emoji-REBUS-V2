@@ -2406,9 +2406,27 @@
                     if(typeof after==='function')after();
                 };
             }
+            // GitHub Pages / hosted-page guard.
+            // The previous refactor called isOnlinePage() but never defined it,
+            // so pressing START caused a ReferenceError before the room was created.
+            function isOnlinePage(){
+                try{
+                    const protocol=String(location.protocol||'').toLowerCase();
+                    const host=String(location.hostname||'').toLowerCase();
+                    // GitHub Pages and normal HTTPS hosts are valid. Localhost/127.0.0.1
+                    // are also valid for development; file:// is intentionally rejected.
+                    if(protocol==='file:') return false;
+                    if(protocol==='https:') return true;
+                    if(protocol==='http:' && (host==='localhost'||host==='127.0.0.1'||host==='[::1]')) return true;
+                    return false;
+                }catch(e){
+                    return false;
+                }
+            }
+
             function readyForOnline(after){
                 if(!isOnlinePage()){
-                    showLobby('Open the game from GitHub Pages',`<div class="bg-amber-50 border-2 border-amber-400 rounded p-3 text-left text-xs font-bold">Online rooms need the HTTPS GitHub Pages version of this game.</div>`);
+                    showLobby('Open the game from GitHub Pages',`<div class="bg-amber-50 border-2 border-amber-400 rounded p-3 text-left text-xs font-bold">Online rooms need an HTTPS hosted page such as GitHub Pages. This local file cannot create a Realtime room.</div>`);
                     setInteractionLocked(false);return false;
                 }
                 if(!window.supabase?.createClient){showLobby('Online library unavailable',`<div class="bg-red-50 border-2 border-red-400 rounded p-3 text-left text-xs font-bold">The Realtime library did not load. Refresh the GitHub Pages page and try again.</div>`);setInteractionLocked(false);return false;}
@@ -2728,7 +2746,7 @@
                 subscribeClient();
             }
             function showHostLobby(){
-                showLobby('Host Lobby',`<div class="bg-slate-100 border-2 border-slate-900 rounded p-3"><div class="text-[10px] font-black">ROOM CODE</div><div class="text-3xl font-black tracking-[.25em]">${escRoom(N.code)}</div><div class="text-xs font-black mt-2">🎯 ${escRoom(state.difficulty)} · ⏱️ ${state.baseTimerDuration}s / question</div><div id="or-players" class="mt-2">🔵 Blue: 1 &nbsp; 🔴 Red: 0</div><div id="or-wait-note" class="text-[10px] font-bold text-amber-700 mt-2">Waiting for at least one player to join…</div><div class="text-[10px] font-bold text-slate-500 mt-1">Host = 🔵 Blue. Join = 🔴 Red. The match timer starts only after Host presses Start.</div><button id="or-start" disabled class="solid-btn bg-slate-300 text-slate-500 w-full py-2 mt-3 font-black cursor-not-allowed">WAITING FOR PLAYER…</button></div>`);
+                showLobby('Host Lobby',`<div class="bg-slate-100 border-2 border-slate-900 rounded p-3"><div class="text-[10px] font-black">ROOM CODE</div><div class="text-4xl font-black tracking-[.3em] text-blue-900">${escRoom(N.code)}</div><div class="text-[10px] font-black text-slate-500 mt-1">Share this code with the Red Team player</div><div class="text-xs font-black mt-2">🎯 ${escRoom(state.difficulty)} · ⏱️ ${state.baseTimerDuration}s / question</div><div id="or-players" class="mt-2">🔵 Blue: 1 &nbsp; 🔴 Red: 0</div><div id="or-wait-note" class="text-[10px] font-bold text-amber-700 mt-2">Waiting for at least one player to join…</div><div class="text-[10px] font-bold text-slate-500 mt-1">Host = 🔵 Blue. Join = 🔴 Red. The match timer starts only after Host presses Start.</div><button id="or-start" disabled class="solid-btn bg-slate-300 text-slate-500 w-full py-2 mt-3 font-black cursor-not-allowed">WAITING FOR PLAYER…</button></div>`);
                 status('Room ready — waiting for players',true);document.getElementById('or-start').onclick=hostStart;renderPlayers();
             }
             function hostStart(){
