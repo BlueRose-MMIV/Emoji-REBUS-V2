@@ -2416,6 +2416,14 @@
             }
             function escRoom(v){return typeof esc==='function'?esc(v):String(v).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));}
             function clientId(){return N.clientId||(N.clientId=(crypto?.randomUUID?crypto.randomUUID():`p-${Date.now()}-${Math.random().toString(36).slice(2)}`));}
+            function makeRoomCode(){
+                const chars='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+                let out='';
+                const bytes=new Uint8Array(6);
+                try{crypto.getRandomValues(bytes);}catch{for(let i=0;i<6;i++)bytes[i]=Math.floor(Math.random()*256);}
+                for(let i=0;i<6;i++)out+=chars[bytes[i]%chars.length];
+                return out;
+            }
             function topic(){return `emoji-rebus-room-${N.code.toUpperCase()}`;}
             function modal(){return document.getElementById('online-room-modal');}
             function ensureUI(){
@@ -2616,7 +2624,9 @@
                         if(s==='SUBSCRIBED'){
                             N.ready=true;N.onlineReady=true;
                             await N.channel.track({id:clientId(),role:'host',team:'a'});
-                            showHostLobby();startHostTimers();status('Room ready — waiting for players',true);
+                            // The lobby is already visible with the room code.
+                            // Do not recreate it here; only refresh presence/player state.
+                            startHostTimers();renderPlayers();status('Room ready — waiting for players',true);
                         }else if(s==='CHANNEL_ERROR'||s==='TIMED_OUT'){
                             status('Realtime server connection failed. Please refresh and try again.',false);
                         }
@@ -2663,8 +2673,12 @@
             }
             function create(){
                 if(!readyForOnline(()=>create()))return;
-                cleanup();N.role='host';N.team='a';N.code=roomCode();N.started=false;N.ready=false;N.clientId=clientId();N.generation++;
-                setInteractionLocked(true);status('Connecting to Realtime…',true);
+                cleanup();
+                N.role='host';N.team='a';N.code=makeRoomCode();N.started=false;N.ready=false;N.clientId=clientId();N.generation++;
+                setInteractionLocked(true);
+                // Show the code immediately. Network connection must not hide the lobby.
+                showHostLobby();
+                status('Connecting to Realtime…',true);
                 subscribeHost();
             }
             function join(code){
@@ -2679,10 +2693,16 @@
                 status('Room ready — waiting for players',true);document.getElementById('or-start').onclick=hostStart;renderPlayers();
             }
             function hostStart(){
-                if(N.role!=='host'||!N.ready||N.players.size<1){status('At least one player must join before the game can start.',false);return;}
+                if(N.role!=='host'||!N.ready){status('Room is still connecting. Please wait for Realtime to finish connecting.',false);return;}
+                if(N.players.size<1){status('At least one player must join before the game can start.',false);return;}
+                // Mark started before starting the activity so all timer/state guards see the match as live.
+                N.started=true;
                 document.getElementById('intro-overlay').classList.add('hidden');
-                applyPlayerModeUI();startActivity(tempIntroActivity);
-                N.started=true;setInteractionLocked(N.team!==state.activeTurn);sendState();closeModal();
+                applyPlayerModeUI();
+                startActivity(tempIntroActivity);
+                setInteractionLocked(N.team!==state.activeTurn);
+                sendState();
+                closeModal();
             }
             window.onlineRoomStart=function(mode,code){ensureUI();if(mode==='host')create();else if(mode==='join')join(code);else{cleanup();setInteractionLocked(false);}};
             window.addEventListener('beforeunload',()=>{try{N.channel?.untrack();}catch{}cleanup();});
