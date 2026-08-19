@@ -2311,7 +2311,17 @@
                 {urls:'stun:stun1.l.google.com:19302'}
             ]};
             const SYNC_INTERVAL=500, CONNECT_TIMEOUT=15000, MAX_JOIN_RETRIES=2;
-            const PEER_CONFIG={debug:0,host:'0.peerjs.com',port:443,path:'/',secure:true,config:ICE};
+            // PeerJS Cloud: let the client use its current official cloud defaults.
+            // Explicitly forcing host/path/SSL here made the local-file test brittle.
+            // GitHub Pages (HTTPS) will use the secure transport automatically.
+            const PEER_CONFIG={debug:1,config:ICE};
+            function makePeer(id){
+                // PeerJS chooses the correct Cloud transport from the current page context.
+                // For GitHub Pages this is HTTPS/WSS. For local file:// testing we show a
+                // clear message instead of leaving the user in an endless signaling timeout.
+                return id ? new Peer(id,PEER_CONFIG) : new Peer(PEER_CONFIG);
+            }
+            function isOnlinePage(){return location.protocol==='https:' || location.protocol==='http:';}
             function esc(x){return String(x).replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));}
             function roomCode(){const c='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';return Array.from({length:6},()=>c[Math.floor(Math.random()*c.length)]).join('');}
             function modal(){return document.getElementById('online-room-modal');}
@@ -2356,9 +2366,11 @@
             }
             function create(){
                 if(typeof Peer==='undefined'){alert('Online networking library failed to load. Please refresh the page.');return;}
+                if(!isOnlinePage()){
+                    showLobby('Open the game from GitHub Pages',`<div class="bg-amber-50 border-2 border-amber-400 rounded p-3 text-left text-xs font-bold">Online rooms need a normal web origin (HTTPS/HTTP). Please open the game through GitHub Pages before creating an online room.</div><div class="text-[10px] text-slate-500 font-bold mt-2">The game itself still works locally; only Online Room needs the web-hosted page.</div><button id="or-copy-note" class="solid-btn bg-yellow-400 text-slate-900 w-full py-2 mt-3 font-black">GOT IT</button>`);document.getElementById('or-copy-note').onclick=()=>modal().classList.add('hidden');setInteractionLocked(false);return;}
                 cleanup();N.role='host';N.team=window.__pendingOnlineTeam==='b'?'b':'a';N.code=roomCode();N.started=false;N.ready=false;N.seq=0;N.lastAppliedSeq=0;N.quizResetVersion=0;N.lastQuizResetVersion=0;
                 setInteractionLocked(true);status('Starting room…',true);
-                N.peer=new Peer('rebus-'+N.code,PEER_CONFIG);
+                N.peer=makePeer('rebus-'+N.code);
                 N.peer.on('open',()=>{N.ready=true;N.onlineReady=true;showHostLobby();startHostTimers();});
                 N.peer.on('connection',setupHost);
                 N.peer.on('disconnected',()=>{try{N.peer.reconnect();}catch{}});
@@ -2371,6 +2383,9 @@
             }
             function join(code){
                 if(typeof Peer==='undefined'){alert('Online networking library failed to load. Please refresh the page.');return;}
+                if(!isOnlinePage()){
+                    showLobby('Open the game from GitHub Pages',`<div class="bg-amber-50 border-2 border-amber-400 rounded p-3 text-left text-xs font-bold">Online rooms need a normal web origin (HTTPS/HTTP). This file is currently opened directly with <code>file://</code>, which gives the browser an opaque origin and can prevent the signaling connection from completing.</div><div class="text-[10px] text-slate-500 font-bold mt-2">Upload this same HTML file to GitHub Pages, open the HTTPS page in both browsers, then use the same room code.</div><button id="or-copy-note" class="solid-btn bg-yellow-400 text-slate-900 w-full py-2 mt-3 font-black">GOT IT</button>`);document.getElementById('or-copy-note').onclick=()=>modal().classList.add('hidden');setInteractionLocked(false);return;
+                }
                 cleanup();N.role='client';N.team=window.__pendingOnlineTeam==='b'?'b':'a';N.code=code;N.ready=false;N.seq=0;N.lastAppliedSeq=0;N.quizResetVersion=0;N.lastQuizResetVersion=0;N.joinRetries=0;
                 setInteractionLocked(true);
                 showLobby('Joining room',`<div class="bg-slate-100 border-2 border-slate-900 rounded p-3 font-black">ROOM ${esc(code)}<br><span id="or-join-detail" class="text-xs text-slate-500">Connecting to signaling server…</span></div><div class="text-[10px] text-slate-500 font-bold mt-2">The game will not start until the Host starts it. If connection fails, this client will retry automatically.</div>`);
@@ -2381,22 +2396,49 @@
                 if(N.joinRetries>MAX_JOIN_RETRIES+1){status('Unable to connect to the Host. Check the room code, Host connection, and GitHub Pages HTTPS, then try again.',false);setInteractionLocked(true);return;}
                 const gen=++N.connectGeneration;
                 try{N.peer&&N.peer.destroy();}catch{}
-                N.peer=new Peer(PEER_CONFIG);
+                try{N.conns.forEach(c=>{try{c.close()}catch{}});}catch{}
+                N.conns.clear();
+                clearConnectTimer();
+                N.peer=makePeer();
+                let connectionStarted=false;
+                let retryScheduled=false;
+                const target='rebus-'+N.code;
+                const startConnection=()=>{
+                    if(connectionStarted||gen!==N.connectGeneration||N.role!=='client'||!N.peer||N.peer.destroyed)return;
+                    connectionStarted=true;
+                    status(`Contacting Host… (${N.joinRetries}/${MAX_JOIN_RETRIES+1})`,true);
+                    const c=N.peer.connect(target,{reliable:true,serialization:'json',metadata:{team:N.team}});
+                    setupClient(c);startConnectTimer(c);
+                };
+                // PeerJS can queue an outbound connection before the signaling
+                // socket emits `open`. Starting immediately avoids an unnecessary
+                // wait on browsers/networks where the signaling open event is slow.
+                startConnection();
                 N.peer.on('open',()=>{
                     if(gen!==N.connectGeneration||N.role!=='client')return;
-                    status(`Signaling server connected — contacting Host… (${N.joinRetries}/${MAX_JOIN_RETRIES+1})`,true);
-                    const c=N.peer.connect('rebus-'+N.code,{reliable:true,serialization:'json',metadata:{team:N.team}});
-                    setupClient(c);startConnectTimer(c);
+                    status(`Signaling connected — contacting Host… (${N.joinRetries}/${MAX_JOIN_RETRIES+1})`,true);
+                    startConnection();
                 });
                 N.peer.on('disconnected',()=>{
                     if(gen!==N.connectGeneration||N.role!=='client')return;
-                    status('Signaling server disconnected — retrying…',false);
-                    setTimeout(()=>{if(gen===N.connectGeneration&&N.role==='client'&&!N.started)connectToHost();},700);
+                    status('Signaling disconnected — retrying…',false);
+                    if(!retryScheduled){retryScheduled=true;setTimeout(()=>{if(gen===N.connectGeneration&&N.role==='client'&&!N.started)connectToHost();},700);}
                 });
                 N.peer.on('error',e=>{
                     if(gen!==N.connectGeneration||N.role!=='client')return;
-                    if(e.type==='peer-unavailable'){status('Room not found or Host is offline. Retrying…',false);setTimeout(()=>{if(gen===N.connectGeneration&&N.role==='client'&&!N.started)connectToHost();},900);}
-                    else {status('Connection error: '+e.type+' — retrying…',false);setTimeout(()=>{if(gen===N.connectGeneration&&N.role==='client'&&!N.started)connectToHost();},900);}
+                    const t=e&&e.type||'unknown';
+                    // peer-unavailable is expected when the Host is still coming
+                    // online; retry without creating a second Peer at the same time.
+                    if(t==='peer-unavailable'){
+                        status('Host not reachable yet — retrying…',false);
+                        if(!retryScheduled){retryScheduled=true;setTimeout(()=>{if(gen===N.connectGeneration&&N.role==='client'&&!N.started)connectToHost();},900);}
+                    }else if(t==='network'||t==='server-error'||t==='socket-error'||t==='socket-closed'){
+                        status('Signaling network error — retrying…',false);
+                        if(!retryScheduled){retryScheduled=true;setTimeout(()=>{if(gen===N.connectGeneration&&N.role==='client'&&!N.started)connectToHost();},900);}
+                    }else{
+                        status('Connection error: '+t+' — retrying…',false);
+                        if(!retryScheduled){retryScheduled=true;setTimeout(()=>{if(gen===N.connectGeneration&&N.role==='client'&&!N.started)connectToHost();},900);}
+                    }
                 });
             }
             function showHostLobby(){
