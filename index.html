@@ -2366,7 +2366,7 @@
             const ACTIONS=['hangmanGuess','nextHangman','hintHangman','skipQuiz','quizSubmit','nextQuiz','hintQuiz','revealQuiz','skipHangman','setTurn','reward','timeout'];
             const SYNC_INTERVAL=750, JOIN_HEARTBEAT=3000, MAX_JOIN_WAIT=30000, WATCHDOG_STALE=6000;
             const RECONNECT_BASE=1200, RECONNECT_MAX=10000, MAX_MESH_PEERS=6;
-            const PEER_ID_PREFIX='emoji-rebus-room-';
+            const PEER_ID_PREFIX='';
         
             function isOnlinePage(){
                 try{
@@ -2395,7 +2395,7 @@
                 try{crypto.getRandomValues(bytes);}catch{for(let i=0;i<6;i++)bytes[i]=Math.floor(Math.random()*256);}
                 for(let i=0;i<6;i++)out+=chars[bytes[i]%chars.length];return out;
             }
-            function peerIdForCode(code){return `${PEER_ID_PREFIX}${String(code||'').toLowerCase()}`;}
+            function peerIdForCode(code){return String(code||'').trim().toUpperCase();}
             function modal(){return document.getElementById('online-room-modal');}
             function closeModal(){modal()?.classList.add('hidden');}
             function ensureUI(){
@@ -2470,7 +2470,7 @@
             function connectPeer(peerId){
                 if(!peerId||peerId===N.peer?.id||N.mesh.has(peerId)||N.pendingPeers.has(peerId)||N.mesh.size>=MAX_MESH_PEERS)return;
                 N.pendingPeers.add(peerId);
-                try{const conn=N.peer.connect(peerId,{reliable:true,serialization:'json',metadata:{clientId:N.clientId,room:N.code}});N.mesh.set(peerId,conn);attachMeshConnection(conn,peerId,false);}catch{}finally{N.pendingPeers.delete(peerId);}
+                try{const conn=N.peer.connect(peerId,{reliable:true,serialization:'json',metadata:{clientId:N.clientId,room:N.code}});N.mesh.set(peerId,conn);attachMeshConnection(conn,peerId,false);conn.on('error',()=>{if(N.role==='client'&&peerId===N.hostPeerId){try{conn.close();}catch{}N.mesh.delete(peerId);scheduleMeshReconnect();}});}catch{}finally{N.pendingPeers.delete(peerId);}
             }
             function requestRosterFromHost(){sendToConn(N.mesh.get(N.hostPeerId),{type:'roster-request',from:N.clientId});}
             function attachMeshConnection(conn,peerId,isHostSide){
@@ -2558,7 +2558,7 @@
             function acceptRemoteAction(payload){
                 if(!payload?.from||!Number.isInteger(payload.id)||!valid(payload.a))return false;const p=N.players.get(payload.from);if(!p||p.team!=='b'||state.activeTurn!=='b'||N.phase!=='playing')return false;return true;
             }
-            const PEER_SERVER={host:'0.peerjs.com',port:443,path:'/',secure:true};
+            const PEER_SERVER={}; // Use PeerJS Cloud defaults exactly; explicit cloud host/SSL overrides can cause incompatibilities.
             // Public Open Relay TURN fallback. Direct/STUN is tried first; TURN is only used when needed.
             // Metered publishes these endpoints for browser WebRTC clients.
             const ICE_CONFIG={iceServers:[
@@ -2566,9 +2566,10 @@
                 {urls:'stun:openrelay.metered.ca:80'},
                 {urls:'turn:openrelay.metered.ca:80',username:'openrelayproject',credential:'openrelayproject'},
                 {urls:'turn:openrelay.metered.ca:443',username:'openrelayproject',credential:'openrelayproject'},
-                {urls:'turn:openrelay.metered.ca:443?transport=tcp',username:'openrelayproject',credential:'openrelayproject'}
-            ],sdpSemantics:'unified-plan'};
-            function peerOptions(debug=1){return {...PEER_SERVER,config:ICE_CONFIG,debug};}
+                {urls:'turn:openrelay.metered.ca:443?transport=tcp',username:'openrelayproject',credential:'openrelayproject'},
+                {urls:'turns:openrelay.metered.ca:443?transport=tcp',username:'openrelayproject',credential:'openrelayproject'}
+            ],iceTransportPolicy:'all',iceCandidatePoolSize:4,sdpSemantics:'unified-plan'};
+            function peerOptions(debug=3){return {config:ICE_CONFIG,debug};}
             function peerErrorText(err){return String(err?.type||err?.message||'unknown').replace(/-/g,' ');}
             function createHostPeer(){
                 const gen=N.generation;N.hostPeerId=peerIdForCode(N.code);N.connecting=true;
@@ -2581,7 +2582,7 @@
             function createClientPeer(){
                 const gen=N.generation;N.connecting=true;
                 try{N.peer=new Peer(undefined,peerOptions(2));}catch{status('Could not start online connection.',false);return;}
-                N.peer.on('open',()=>{if(gen!==N.generation)return;N.connecting=false;setHealth('warn','CONNECTING TO HOST…',true);status('Signaling connected — opening WebRTC data channel…',true);connectPeer(N.hostPeerId);clearTimeout(N.stateTimer);N.stateTimer=setTimeout(()=>{if(gen===N.generation&&!N.mesh.has(N.hostPeerId)){setHealth('bad','HOST NOT REACHABLE',true);status('WebRTC connection failed. TURN fallback was tried; use Retry Connection or create a new room.',false);}},MAX_JOIN_WAIT);});
+                N.peer.on('open',()=>{if(gen!==N.generation)return;N.connecting=false;setHealth('warn','CONNECTING TO HOST…',true);status('Signaling connected — opening WebRTC data channel…',true);connectPeer(N.hostPeerId);clearTimeout(N.stateTimer);N.stateTimer=setTimeout(()=>{if(gen===N.generation&&!N.mesh.has(N.hostPeerId)){setHealth('bad','HOST NOT REACHABLE',true);status('WebRTC connection failed after signaling. The browser could not establish a usable ICE path. Retry will rebuild the connection.',false);}},MAX_JOIN_WAIT);});
                 N.peer.on('disconnected',()=>{if(gen!==N.generation)return;setHealth('warn','SIGNALING RECOVERING…',true);status('Signaling connection lost — reconnecting…',false);try{N.peer.reconnect();}catch{scheduleMeshReconnect();}});
                 N.peer.on('error',err=>{if(gen!==N.generation)return;console.warn('[Emoji Rebus Mesh] Client peer error',err);const t=peerErrorText(err);setHealth('bad',`ONLINE ERROR · ${t}`,true);status(`Online error: ${t}. Retrying…`,false);scheduleMeshReconnect();});
                 startClientWatchdog();
