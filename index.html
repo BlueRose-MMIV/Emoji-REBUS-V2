@@ -2490,13 +2490,30 @@
                 });
                 window.addEventListener('online',()=>{
                     if(N.role==='client'){
+                        // A network handover does not automatically mean the live WebRTC data path died.
+                        // Prefer preserving a healthy host connection and let the watchdog decide later.
                         markClientRecovering('Internet connection restored');
                         clearTimeout(N.iceGraceTimer);
                         N.iceGraceTimer=setTimeout(()=>{
-                            if(N.role==='client'&&N.networkRecovering)rebuildClientPeer('network-online');
+                            if(N.role!=='client'||N.destroying)return;
+                            const hc=hostConnection();
+                            const stale=N.lastSnapshotAt&&Date.now()-N.lastSnapshotAt>WATCHDOG_STALE;
+                            if(hc && !stale){
+                                clearClientRecovering();
+                                status('Internet restored — existing game connection is healthy.',true);
+                                return;
+                            }
+                            if(N.networkRecovering)rebuildClientPeer('network-online');
                         },RECOVERY_GRACE);
                     }
-                    else if(N.role==='host'){N.networkRecovering=false;setInteractionLocked(false);setHealth('warn','NETWORK RECOVERING…',true);status('Internet restored. Reconnecting room…',false);try{N.peer?.reconnect();}catch{}setTimeout(()=>restartHostMeshAfterNetwork(),RECOVERY_GRACE);}
+                    else if(N.role==='host'){
+                        // Preserve existing player data connections whenever possible.
+                        N.networkRecovering=false;
+                        updateMeshHealth();
+                        setInteractionLocked(false);
+                        status('Internet restored. Reconnecting signaling if needed…',true);
+                        try{N.peer?.reconnect();}catch{}
+                    }
                 });
             }
             function restartHostMeshAfterNetwork(){
@@ -2551,8 +2568,16 @@
                 const puzzle=puzzles[state.currentPuzzleIndex];
                 let ok=true,text='';
                 if(state.activeTab==='hangman'){
-                    ok=state.hangmanHearts>0;
-                    text=ok?`🎉 PERFECT! Word was "${puzzle.answer}"`:`💔 OUT OF HEARTS! Answer was "${puzzle.answer}"`;
+                    if(actionType==='timeout'){
+                        ok=false;
+                        text=`⏰ TIME'S UP! Answer was "${puzzle.answer}"`;
+                    }else if(actionType==='revealHangman'){
+                        ok=false;
+                        text=`Answer Revealed: ${puzzle.answer}`;
+                    }else{
+                        ok=state.hangmanHearts>0;
+                        text=ok?`🎉 PERFECT! Word was "${puzzle.answer}"`:`💔 OUT OF HEARTS! Answer was "${puzzle.answer}"`;
+                    }
                 }else{
                     if(actionType==='revealQuiz')text=`Answer Revealed: ${puzzle.answer}`;
                     else if(actionType==='timeout'){ok=false;text=`⏰ TIME'S UP! Answer: ${puzzle.answer}`;}
@@ -2736,6 +2761,12 @@
                         }
                         return;
                     }
+                    // The data channel is alive again. If state snapshots are fresh, recovery is done.
+                    if(hc && N.networkRecovering && !stale){
+                        clearClientRecovering();
+                        status('Game connection restored.',true);
+                        return;
+                    }
                     if(stale&&!N.networkRecovering){
                         // During a network handover state sync may pause briefly; don't rebuild immediately.
                         markClientRecovering('Game state sync delayed');
@@ -2867,7 +2898,20 @@
                 try{N.peer=new Peer(N.hostPeerId,peerOptions(2));}catch{status('Could not start online room.',false);setHealth('bad','ONLINE ERROR',false);return;}
                 N.peer.on('open',id=>{if(gen!==N.generation)return;N.ready=true;N.connecting=false;N.networkRecovering=false;setInteractionLocked(false);setHealth('ok','MESH ONLINE · 0 PEERS',false);startHostTimers();renderPlayers();status('Room ready — waiting for players to join the mesh',true);});
                 N.peer.on('connection',conn=>{if(gen!==N.generation)return;const pid=conn.peer;N.mesh.set(pid,conn);attachMeshConnection(conn,pid,true);});
-                N.peer.on('disconnected',()=>{if(gen!==N.generation||N.destroying)return;N.ready=false;N.networkRecovering=true;setInteractionLocked(true);setHealth('warn','SIGNALING RECOVERING…',true);status('Signaling connection lost — reconnecting…',false);try{N.peer.reconnect();}catch{} });
+                N.peer.on('disconnected',()=>{
+                    if(gen!==N.generation||N.destroying)return;
+                    // Signaling loss can happen while the existing WebRTC data channel is still healthy.
+                    // Do not tear down a working game connection just because PeerJS signaling blinked.
+                    if(N.role==='host'){
+                        if(meshCount()>0){
+                            setHealth('warn','SIGNALING RECOVERING…',true);
+                            status('Signaling is reconnecting; existing player connection remains active.',true);
+                        }else{
+                            N.ready=false;N.networkRecovering=true;setHealth('warn','SIGNALING RECOVERING…',true);status('Signaling connection lost — reconnecting…',false);
+                        }
+                        try{N.peer.reconnect();}catch{}
+                    }
+                });
                 N.peer.on('error',err=>{if(gen!==N.generation)return;console.warn('[Emoji Rebus Mesh] Host peer error',err);const t=peerErrorText(err);if(err.type==='unavailable-id'){setHealth('bad','ROOM ID BUSY',false);status('This room code is currently busy. Create a new room.',false);}else{setHealth('bad',`ONLINE ERROR · ${t}`,false);status(`Online error: ${t}. Retry or create a new room.`,false);}});
             }
             function createClientPeer(){
@@ -2878,8 +2922,18 @@
                     clearTimeout(N.stateTimer);connectPeer(N.hostPeerId);
                     N.stateTimer=setTimeout(()=>{if(gen===N.generation&&N.role==='client'&&!hostConnection()){markClientRecovering('Host data channel not ready');scheduleMeshReconnect('data channel timeout');}},MAX_JOIN_WAIT);
                 });
-                N.peer.on('disconnected',()=>{if(gen!==N.generation||N.destroying)return;
-                    if(!N.networkRecovering){markClientRecovering('Signaling connection lost');try{N.peer.reconnect();}catch{scheduleMeshReconnect('signaling reconnect failed');}}
+                N.peer.on('disconnected',()=>{
+                    if(gen!==N.generation||N.destroying)return;
+                    // Losing PeerJS signaling is not enough reason to rebuild the data channel.
+                    // Preserve an open Host connection and only recover if the application path is actually stale.
+                    if(hostConnection()){
+                        setHealth('warn','SIGNALING RECOVERING…',true);
+                        status('Signaling reconnecting; game data channel is still active.',true);
+                        try{N.peer.reconnect();}catch{}
+                    }else{
+                        if(!N.networkRecovering)markClientRecovering('Host signaling connection lost');
+                        try{N.peer.reconnect();}catch{scheduleMeshReconnect('signaling reconnect failed');}
+                    }
                 });
                 N.peer.on('error',err=>{if(gen!==N.generation||N.destroying)return;console.warn('[Emoji Rebus Mesh] Client peer error',err);const t=peerErrorText(err);
                     markClientRecovering(`Online error: ${t}`);scheduleMeshReconnect('peer error');
