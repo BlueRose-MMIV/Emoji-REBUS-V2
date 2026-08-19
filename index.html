@@ -2346,7 +2346,7 @@
         // ================================================================
         (function(){
             /*
-             * ZERO-CONFIG P2P MESH ONLINE MULTIPLAYER - V7 PROTOTYPE
+             * ZERO-CONFIG P2P MESH ONLINE MULTIPLAYER - V12 NETWORK HANDOVER
              * --------------------------------------------------------
              * Transport: WebRTC DataChannels via PeerJS.
              * Signaling: PeerJS Cloud only (room discovery/bootstrap).
@@ -2361,11 +2361,12 @@
                 clientId:'',players:new Map(),generation:0,clock:null,stateTimer:null,clientWatchdog:null,
                 joinTimer:null,recoveryTimer:null,actionSeq:0,lastSeenEvents:new Set(),mesh:new Map(),
                 pendingPeers:new Set(),hostPeerId:'',connecting:false,reconnecting:false,destroying:false,
-                reconnectAttempts:0,meshEventCounter:0,lastSeenStates:new Set()
+                reconnectAttempts:0,meshEventCounter:0,lastSeenStates:new Set(),
+                networkRecovering:false,recoveryCycle:0,hostConnToken:0,pendingActions:[],actionFlushTimer:null,onlineFeedback:null,onlineFeedbackVersion:0,onlineAdvanceTimer:null,lastInputLockReason:'',iceGraceTimer:null,lastHostPathChangeAt:0
             };
             const ACTIONS=['hangmanGuess','nextHangman','hintHangman','skipQuiz','quizSubmit','nextQuiz','hintQuiz','revealQuiz','skipHangman','setTurn','reward','timeout'];
             const SYNC_INTERVAL=750, JOIN_HEARTBEAT=3000, MAX_JOIN_WAIT=30000, WATCHDOG_STALE=6000;
-            const RECONNECT_BASE=1200, RECONNECT_MAX=10000, MAX_MESH_PEERS=6;
+            const RECONNECT_BASE=1800, RECONNECT_MAX=14000, MAX_MESH_PEERS=6, RECOVERY_GRACE=4500, ICE_DISCONNECT_GRACE=6500, ACTION_QUEUE_MAX=12, HEARTBEAT_MS=3500;
             const PEER_ID_PREFIX='';
         
             function isOnlinePage(){
@@ -2422,39 +2423,171 @@
         
             function meshConnections(){return [...N.mesh.values()].filter(c=>c&&c.open);}
             function meshCount(){return meshConnections().length;}
+            function hostConnection(){const c=N.hostPeerId?N.mesh.get(N.hostPeerId):null;return c&&c.open?c:null;}
+            function connectionIsCurrent(peerId,conn){return N.mesh.get(peerId)===conn;}
             function updateMeshHealth(){
                 if(!N.role)return;
-                const count=meshCount();
-                if(N.role==='host')setHealth('ok',`MESH ONLINE · ${count} PEER${count===1?'':'S'}`,false);
-                else if(count>0)setHealth('ok',`MESH CONNECTED · ${count} PEER${count===1?'':'S'}`,false);
+                if(N.role==='host'){
+                    if(N.networkRecovering){setHealth('warn','NETWORK RECOVERING…',true);return;}
+                    const count=meshCount();setHealth('ok',`MESH ONLINE · ${count} PEER${count===1?'':'S'}`,false);return;
+                }
+                const hc=hostConnection();
+                if(hc && !N.networkRecovering){setHealth('ok',`MESH CONNECTED · ${Math.max(1,meshCount())} PEER${meshCount()===1?'':'S'}`,false);return;}
+                if(hc && N.networkRecovering){setHealth('warn','NETWORK CHANGING…',true);return;}
+                setHealth('warn','RECONNECTING…',true);
             }
+            function markClientRecovering(reason='Network connection changed', hard=false){
+                if(N.role!=='client'||N.destroying)return;
+                N.lastHostPathChangeAt=Date.now();
+                if(!N.networkRecovering){N.networkRecovering=true;N.reconnecting=true;N.recoveryCycle++;N.reconnectAttempts=0;}
+                N.ready=false;
+                updateMeshHealth();
+                // Do NOT lock answer input just because the network is temporarily changing.
+                // Actions are queued and replayed only if turn + puzzle still match.
+                setInteractionLocked(state.activeTurn!==N.team || !N.started, {preserveInput:true});
+                status(`${reason}. Keeping your input ready while the connection recovers…`,false);
+                clearTimeout(N.recoveryTimer);N.recoveryTimer=null;
+                clearTimeout(N.iceGraceTimer);N.iceGraceTimer=null;
+                if(hard)scheduleMeshReconnect(reason);
+            }
+            function clearClientRecovering(){
+                if(N.role!=='client')return;
+                clearTimeout(N.iceGraceTimer);N.iceGraceTimer=null;
+                N.networkRecovering=false;N.reconnecting=false;N.reconnectAttempts=0;N.ready=true;
+                updateMeshHealth();
+                // Keep input available if this is still our turn; flush queued actions after sync.
+                setInteractionLocked(state.activeTurn!==N.team || !N.started, {preserveInput:true});
+                flushPendingActions();
+            }
+            function queueAction(a){
+                const now=Date.now();
+                const same=N.pendingActions.find(x=>x.turn===state.activeTurn&&x.puzzle===state.currentPuzzleIndex&&JSON.stringify(x.a)===JSON.stringify(a));
+                if(same)return;
+                if(N.pendingActions.length>=ACTION_QUEUE_MAX)N.pendingActions.shift();
+                N.pendingActions.push({a,queuedAt:now,turn:state.activeTurn,puzzle:state.currentPuzzleIndex});
+            }
+            function flushPendingActions(){
+                if(N.role!=='client'||!hostConnection()||N.phase!=='playing'||N.team!==state.activeTurn)return;
+                const pending=N.pendingActions.splice(0);
+                for(const item of pending){
+                    if(Date.now()-item.queuedAt>15000)continue;
+                    if(item.turn!==state.activeTurn||item.puzzle!==state.currentPuzzleIndex)continue;
+                    sendAct(item.a,true);
+                }
+            }
+            function bindNetworkEvents(){
+                if(N.networkEventsBound)return;
+                N.networkEventsBound=true;
+                window.addEventListener('offline',()=>{
+                    if(N.role==='client')markClientRecovering('Internet connection lost',true);
+                    else if(N.role==='host'){N.networkRecovering=true;setInteractionLocked(true);setHealth('warn','NETWORK OFFLINE',true);status('Internet connection lost. Waiting for the network…',false);}
+                });
+                window.addEventListener('online',()=>{
+                    if(N.role==='client'){
+                        markClientRecovering('Internet connection restored');
+                        clearTimeout(N.iceGraceTimer);
+                        N.iceGraceTimer=setTimeout(()=>{
+                            if(N.role==='client'&&N.networkRecovering)rebuildClientPeer('network-online');
+                        },RECOVERY_GRACE);
+                    }
+                    else if(N.role==='host'){N.networkRecovering=false;setInteractionLocked(false);setHealth('warn','NETWORK RECOVERING…',true);status('Internet restored. Reconnecting room…',false);try{N.peer?.reconnect();}catch{}setTimeout(()=>restartHostMeshAfterNetwork(),RECOVERY_GRACE);}
+                });
+            }
+            function restartHostMeshAfterNetwork(){
+                if(N.role!=='host'||N.destroying)return;
+                // Keep the room roster; close only stale transport objects so clients can rejoin.
+                N.mesh.forEach((conn)=>{try{conn.close();}catch{}});
+                N.mesh.clear();N.pendingPeers.clear();
+                N.networkRecovering=false;setInteractionLocked(false);setHealth('warn','MESH RECOVERING…',true);status('Network restored. Waiting for players to reconnect…',true);
+                publishRoster();
+            }
+            bindNetworkEvents();
             function stopTimers(){clearInterval(N.clock);clearInterval(N.joinTimer);clearTimeout(N.stateTimer);clearInterval(N.clientWatchdog);clearTimeout(N.recoveryTimer);N.clock=N.joinTimer=N.stateTimer=N.clientWatchdog=N.recoveryTimer=null;}
             function cleanup(){
                 N.generation++;stopTimers();N.destroying=true;
                 N.mesh.forEach(c=>{try{c.close();}catch{}});N.mesh.clear();N.pendingPeers.clear();N.players.clear();
                 try{N.peer?.destroy();}catch{}N.peer=null;N.destroying=false;
-                N.ready=false;N.started=false;N.phase='idle';N.role=null;N.code='';N.seq=0;N.lastAppliedSeq=0;N.remote=false;N.connecting=false;N.reconnecting=false;N.hostPeerId='';N.lastSnapshotAt=0;N.reconnectAttempts=0;N.actionSeq=0;N.lastSeenEvents.clear();N.lastSeenStates.clear();N.meshEventCounter=0;document.getElementById('online-health-float')?.classList.remove('show');
+                N.ready=false;N.started=false;N.phase='idle';N.role=null;N.code='';N.seq=0;N.lastAppliedSeq=0;N.remote=false;N.connecting=false;N.reconnecting=false;N.hostPeerId='';N.lastSnapshotAt=0;N.reconnectAttempts=0;N.actionSeq=0;N.lastSeenEvents.clear();N.lastSeenStates.clear();N.meshEventCounter=0;N.networkRecovering=false;N.recoveryCycle++;N.hostConnToken=0;N.pendingActions=[];clearTimeout(N.actionFlushTimer);N.actionFlushTimer=null;clearTimeout(N.onlineAdvanceTimer);N.onlineAdvanceTimer=null;N.onlineFeedback=null;N.onlineFeedbackVersion=0;document.getElementById('online-health-float')?.classList.remove('show');
             }
             function pack(){
                 return {v:3,activeTab:state.activeTab,mode:state.mode,currentPuzzleIndex:state.currentPuzzleIndex,questionAnswered:state.questionAnswered,quizResetVersion:N.quizResetVersion,
                     availableIndices:[...state.availableIndices],soloScore:state.soloScore,soloStreak:state.soloStreak,teamA:{...state.teamA},teamB:{...state.teamB},activeTurn:state.activeTurn,
                     hangmanHearts:state.hangmanHearts,hangmanGuessedLetters:[...state.hangmanGuessedLetters],hangmanHintUsed:state.hangmanHintUsed,quizHintUsed:state.quizHintUsed,
-                    questionTimeLeft:state.questionTimeLeft,globalTimeLeft:state.globalTimeLeft,streakRisk:state.streakRisk,baseTimerDuration:state.baseTimerDuration,matchDurationMinutes:state.matchDurationMinutes,phase:N.phase};
+                    questionTimeLeft:state.questionTimeLeft,globalTimeLeft:state.globalTimeLeft,streakRisk:state.streakRisk,baseTimerDuration:state.baseTimerDuration,matchDurationMinutes:state.matchDurationMinutes,phase:N.phase,onlineFeedback:N.onlineFeedback};
             }
+            function confirmOnlineManualNext(label){
+                if(!(N.role==='host'||N.role==='client')||N.phase!=='playing'||!state.questionAnswered)return true;
+                return window.confirm(`เปลี่ยนข้อ ${label} ทันทีหรือไม่?\n\nระบบจะแสดงเฉลยให้อัตโนมัติประมาณ 3 วินาทีแล้วข้ามให้เอง หากเลือก OK จะข้ามทันที`);
+            }
+
+            function clearOnlineAutoAdvance(){
+                clearTimeout(N.onlineAdvanceTimer);
+                N.onlineAdvanceTimer=null;
+                N.onlineFeedback=null;
+            }
+            function showOnlineAutoFeedback(feedback){
+                if(!feedback||!feedback.text)return;
+                const success=feedback.ok!==false;
+                if(feedback.tab==='hangman'){
+                    showHangmanFeedback(success,feedback.text);
+                    const btn=document.querySelector('#hm-feedback-overlay button');
+                    if(btn)btn.classList.add('hidden');
+                    setTimeout(()=>document.getElementById('hm-feedback-overlay')?.classList.add('hidden'),3200);
+                }else if(feedback.tab==='play'){
+                    showQuizFeedback(success,feedback.text);
+                    const btn=document.querySelector('#quiz-feedback-overlay button');
+                    if(btn)btn.classList.add('hidden');
+                    setTimeout(()=>document.getElementById('quiz-feedback-overlay')?.classList.add('hidden'),3200);
+                }
+            }
+            function markOnlineQuestionResolved(actionType){
+                if(N.role!=='host'||N.phase!=='playing'||!state.questionAnswered||!['hangman','play'].includes(state.activeTab))return;
+                const puzzle=puzzles[state.currentPuzzleIndex];
+                let ok=true,text='';
+                if(state.activeTab==='hangman'){
+                    ok=state.hangmanHearts>0;
+                    text=ok?`🎉 PERFECT! Word was "${puzzle.answer}"`:`💔 OUT OF HEARTS! Answer was "${puzzle.answer}"`;
+                }else{
+                    if(actionType==='revealQuiz')text=`Answer Revealed: ${puzzle.answer}`;
+                    else if(actionType==='timeout'){ok=false;text=`⏰ TIME'S UP! Answer: ${puzzle.answer}`;}
+                    else {ok=true;text='🎉 CORRECT!';}
+                }
+                clearTimeout(N.onlineAdvanceTimer);
+                N.onlineFeedback={version:++N.onlineFeedbackVersion,tab:state.activeTab,ok,text};
+                showOnlineAutoFeedback(N.onlineFeedback);
+                N.onlineAdvanceTimer=setTimeout(()=>{
+                    if(N.destroying||N.role!=='host'||N.phase!=='playing'||!state.questionAnswered)return;
+                    const nextTab=state.activeTab;
+                    N.remote=true;
+                    try{
+                        if(nextTab==='hangman')O.nextHangman();
+                        else if(nextTab==='play')O.nextQuiz();
+                    }finally{N.remote=false;}
+                    N.onlineFeedback=null;
+                    N.onlineAdvanceTimer=null;
+                    sendState();
+                },3000);
+            }
+
             function apply(s,seq){
                 if(!s||seq<N.lastAppliedSeq)return;N.lastAppliedSeq=seq||N.lastAppliedSeq;N.lastSnapshotAt=Date.now();
                 const old=state.currentPuzzleIndex,oldTab=state.activeTab,puzzleChanged=old!==s.currentPuzzleIndex,tabChanged=oldTab!==s.activeTab,remoteQuizReset=typeof s.quizResetVersion==='number'&&s.quizResetVersion!==N.lastQuizResetVersion;
                 if(typeof s.quizResetVersion==='number')N.lastQuizResetVersion=s.quizResetVersion;
                 Object.assign(state,{activeTab:s.activeTab,mode:s.mode,currentPuzzleIndex:s.currentPuzzleIndex,questionAnswered:!!s.questionAnswered,availableIndices:s.availableIndices||[],soloScore:s.soloScore,soloStreak:s.soloStreak,teamA:{...state.teamA,...s.teamA},teamB:{...state.teamB,...s.teamB},activeTurn:s.activeTurn,hangmanHearts:s.hangmanHearts,hangmanGuessedLetters:new Set(s.hangmanGuessedLetters||[]),hangmanHintUsed:s.hangmanHintUsed,quizHintUsed:s.quizHintUsed,questionTimeLeft:s.questionTimeLeft,globalTimeLeft:s.globalTimeLeft,streakRisk:s.streakRisk||null,baseTimerDuration:s.baseTimerDuration,matchDurationMinutes:s.matchDurationMinutes});
+                const incomingFeedback=s.onlineFeedback;
+                const feedbackChanged=!!incomingFeedback&&incomingFeedback.version!==N.onlineFeedbackVersion;
+                if(incomingFeedback&&incomingFeedback.version>N.onlineFeedbackVersion){N.onlineFeedbackVersion=incomingFeedback.version;N.onlineFeedback=incomingFeedback;}
+
                 N.phase=s.phase==='ended'||Number(s.globalTimeLeft)<=0?'ended':s.phase==='playing'?'playing':'lobby';N.started=N.phase==='playing';
                 if(N.phase==='ended'){stopCurrentQuestionTimer();clearInterval(state.globalTimerInterval);clearInterval(state.questionTimerInterval);}
                 if(N.role==='client'){clearInterval(state.globalTimerInterval);clearInterval(state.questionTimerInterval);state.globalTimerInterval=null;state.questionTimerInterval=null;}
                 if(remoteQuizReset){const qi=document.getElementById('quiz-input');if(qi){qi.value='';onQuizInputType(qi);}}
                 if(N.role==='client'&&N.started){document.getElementById('intro-overlay')?.classList.add('hidden');applyPlayerModeUI();if(tabChanged)startActivityFromSync(state.activeTab);}
                 if(N.role==='client'&&N.phase==='ended'){try{document.getElementById('intro-overlay')?.classList.add('hidden');}catch{}try{endMatch();}catch{}}
+                if(feedbackChanged&&N.role==='client')showOnlineAutoFeedback(incomingFeedback);
                 updateScoresUI();updateAvatarDisplays();updateGlobalTimerDisplay();updateQuestionTimerDisplay();
                 if(puzzleChanged){renderPuzzleFromState();if(N.role==='client')stopCurrentQuestionTimer();else restartCurrentQuestionTimer();}else renderTransientState();
-                if(state.activeTab==='hangman'){renderHangmanWordSlotsSynced();renderQWERTYKeycaps();updateHeartsUI();}setInteractionLocked((N.role==='client'&&!N.started)||((N.role==='client'||N.role==='host')&&N.started&&state.activeTurn!==N.team));
+                if(state.activeTab==='hangman'){renderHangmanWordSlotsSynced();renderQWERTYKeycaps();updateHeartsUI();}setInteractionLocked((N.role==='client'&&!N.started)||((N.role==='client'||N.role==='host')&&N.started&&state.activeTurn!==N.team), {preserveInput:N.role==='client'&&N.networkRecovering&&N.started&&state.activeTurn===N.team});
             }
             function startActivityFromSync(tab){stopCurrentQuestionTimer();clearInterval(state.globalTimerInterval);document.getElementById('view-hangman').classList.add('hidden');document.getElementById('view-play').classList.add('hidden');document.getElementById('view-vocab').classList.add('hidden');if(tab==='hangman')document.getElementById('view-hangman').classList.remove('hidden');else if(tab==='play')document.getElementById('view-play').classList.remove('hidden');else if(tab==='vocab')document.getElementById('view-vocab').classList.remove('hidden');}
             function renderHangmanWordSlotsSynced(){const puzzle=puzzles[state.currentPuzzleIndex],container=document.getElementById('hm-word-slots');if(!puzzle||!container)return;container.innerHTML='';for(const char of puzzle.answer){const box=document.createElement('div');box.className='w-8 h-10 sm:w-11 sm:h-12 border-3 border-slate-900 rounded-xl bg-white font-black text-lg sm:text-2xl flex items-center justify-center shadow-[2px_2px_0px_0px_#0f172a]';if(state.hangmanGuessedLetters.has(char)){box.textContent=char;box.classList.add('bg-emerald-100','text-emerald-900');}else{box.textContent='_';box.classList.add('text-slate-400');}container.appendChild(box);}}
@@ -2468,29 +2601,81 @@
             function rosterPayload(){return {type:'roster',room:N.code,leader:N.hostPeerId,peers:[...new Set([N.hostPeerId,...N.players.keys()].filter(Boolean))].slice(0,MAX_MESH_PEERS)}}
             function publishRoster(){const p=rosterPayload();broadcastMesh(p);}
             function connectPeer(peerId){
-                if(!peerId||peerId===N.peer?.id||N.mesh.has(peerId)||N.pendingPeers.has(peerId)||N.mesh.size>=MAX_MESH_PEERS)return;
+                if(!peerId||peerId===N.peer?.id||N.destroying||N.mesh.size>=MAX_MESH_PEERS)return;
+                const existing=N.mesh.get(peerId);
+                if(existing&&existing.open)return;
+                if(N.pendingPeers.has(peerId))return;
                 N.pendingPeers.add(peerId);
-                try{const conn=N.peer.connect(peerId,{reliable:true,serialization:'json',metadata:{clientId:N.clientId,room:N.code}});N.mesh.set(peerId,conn);attachMeshConnection(conn,peerId,false);conn.on('error',()=>{if(N.role==='client'&&peerId===N.hostPeerId){try{conn.close();}catch{}N.mesh.delete(peerId);scheduleMeshReconnect();}});}catch{}finally{N.pendingPeers.delete(peerId);}
+                const token=++N.hostConnToken;
+                try{
+                    const conn=N.peer.connect(peerId,{reliable:true,serialization:'json',metadata:{clientId:N.clientId,room:N.code}});
+                    N.mesh.set(peerId,conn);
+                    attachMeshConnection(conn,peerId,false,token);
+                }catch(err){
+                    N.pendingPeers.delete(peerId);
+                    if(N.role==='client'&&peerId===N.hostPeerId)scheduleMeshReconnect('connect failed');
+                }
             }
             function requestRosterFromHost(){sendToConn(N.mesh.get(N.hostPeerId),{type:'roster-request',from:N.clientId});}
-            function attachMeshConnection(conn,peerId,isHostSide){
+            function attachMeshConnection(conn,peerId,isHostSide,token){
                 if(!conn)return;
                 conn.on('open',()=>{
-                    N.mesh.set(peerId,conn);N.ready=true;N.connecting=false;N.reconnecting=false;N.reconnectAttempts=0;
-                    updateMeshHealth();
-                    if(N.role==='client'&&peerId===N.hostPeerId){setHealth('ok',`MESH CONNECTED · ${meshCount()} PEER`,false);status('Connected to room mesh — synchronizing…',true);sendToConn(conn,{type:'join',from:N.clientId,team:'b',clientId:N.clientId});}
-                    else if(N.role==='host'){setHealth('ok',`MESH ONLINE · ${meshCount()} PEER${meshCount()===1?'':'S'}`,false);status('Player connected to mesh.',true);}
+                    if(N.destroying||!connectionIsCurrent(peerId,conn))return;
+                    N.pendingPeers.delete(peerId);
+                    N.mesh.set(peerId,conn);
+                    if(N.role==='client'&&peerId===N.hostPeerId){
+                        N.hostConnToken=token;N.connecting=false;N.ready=false;
+                        clearTimeout(N.iceGraceTimer);N.iceGraceTimer=null;
+                        setHealth('ok',`MESH CONNECTED · ${meshCount()} PEER`,false);
+                        status('Connected to room mesh — synchronizing…',true);
+                        sendToConn(conn,{type:'join',from:N.clientId,team:'b',clientId:N.clientId});
+                        startClientWatchdog();
+                    }else if(N.role==='host'){
+                        setHealth('ok',`MESH ONLINE · ${meshCount()} PEER${meshCount()===1?'':'S'}`,false);
+                        status('Player connected to mesh.',true);
+                    }
                 });
-                conn.on('data',payload=>handleMeshPayload(payload,conn,peerId));
-                const inspect=()=>{try{const pc=conn.peerConnection, ice=pc?.iceConnectionState, cs=pc?.connectionState;if(N.role==='client'&&peerId===N.hostPeerId&&!conn.open){if(ice==='checking')setHealth('warn','ICE CHECKING…',true);else if(ice==='failed'||cs==='failed')setHealth('warn','ICE FAILED · RETRYING TURN…',true);} }catch{}};
-                const inspectTimer=setInterval(()=>{if(!N.mesh.has(peerId)||N.destroying){clearInterval(inspectTimer);return;}inspect();},1000);
+                conn.on('data',payload=>{if(connectionIsCurrent(peerId,conn))handleMeshPayload(payload,conn,peerId);});
+                const inspect=()=>{
+                    if(N.destroying||!connectionIsCurrent(peerId,conn)){clearInterval(inspectTimer);return;}
+                    try{
+                        const pc=conn.peerConnection,ice=pc?.iceConnectionState,cs=pc?.connectionState;
+                        if(N.role==='client'&&peerId===N.hostPeerId){
+                            if(ice==='connected'||ice==='completed'||cs==='connected'){
+                                if(N.networkRecovering){setHealth('warn','SYNCING…',true);}
+                                clearTimeout(N.iceGraceTimer);N.iceGraceTimer=null;
+                            }else if(ice==='disconnected'||cs==='disconnected'){
+                                if(!N.networkRecovering){
+                                    markClientRecovering('Host network path interrupted');
+                                    clearTimeout(N.iceGraceTimer);
+                                    N.iceGraceTimer=setTimeout(()=>{
+                                        if(N.role==='client'&&connectionIsCurrent(peerId,conn))scheduleMeshReconnect('ICE still disconnected');
+                                    },ICE_DISCONNECT_GRACE);
+                                }
+                            }else if(ice==='failed'||cs==='failed'){
+                                markClientRecovering('WebRTC path failed',true);
+                            }
+                        }
+                    }catch{}
+                };
+                const inspectTimer=setInterval(inspect,1000);
                 conn.on('close',()=>{
-                    N.mesh.delete(peerId);N.players.delete(peerId);N.pendingPeers.delete(peerId);renderPlayers();updateMeshHealth();
+                    if(!connectionIsCurrent(peerId,conn))return;
+                    clearInterval(inspectTimer);N.mesh.delete(peerId);N.players.delete(peerId);N.pendingPeers.delete(peerId);renderPlayers();
                     if(N.destroying)return;
-                    if(N.role==='client'&&peerId===N.hostPeerId){N.ready=false;setHealth('warn','MESH RECOVERING…',true);status('Host path lost. Rejoining the room mesh…',false);scheduleMeshReconnect();}
-                    else if(N.role==='host'){status('A peer left the mesh. Other peers remain connected.',false);}
+                    if(N.role==='client'&&peerId===N.hostPeerId){
+                        markClientRecovering('Host connection lost');
+                        clearTimeout(N.iceGraceTimer);
+                        N.iceGraceTimer=setTimeout(()=>{
+                            if(N.role==='client'&&!hostConnection())scheduleMeshReconnect('connection closed');
+                        },ICE_DISCONNECT_GRACE);
+                    }else if(N.role==='host'){updateMeshHealth();status('A peer left the mesh. Waiting for reconnect…',false);}
                 });
-                conn.on('error',(err)=>{console.warn('[Emoji Rebus Mesh] DataConnection error',peerId,err);N.mesh.delete(peerId);N.players.delete(peerId);renderPlayers();updateMeshHealth();if(N.role==='client'&&peerId===N.hostPeerId){setHealth('bad',`WEBRTC ERROR · ${peerErrorText(err)}`,true);scheduleMeshReconnect();}});
+                conn.on('error',(err)=>{
+                    if(!connectionIsCurrent(peerId,conn))return;
+                    console.warn('[Emoji Rebus Mesh] DataConnection error',peerId,err);
+                    if(N.role==='client'&&peerId===N.hostPeerId){markClientRecovering(`Connection error: ${peerErrorText(err)}`);scheduleMeshReconnect('data connection error');}
+                });
             }
             function handleMeshPayload(payload,conn,fromPeer){
                 if(N.destroying||!payload)return;
@@ -2508,12 +2693,12 @@
                     updateMeshHealth();return;
                 }
                 if(payload.type==='hello'){
-                    if(N.role==='client'&&payload.to===N.clientId){N.hostPeerId=payload.leader||N.hostPeerId;N.started=!!payload.started;N.phase=payload.phase||'lobby';N.ready=true;apply(payload.state,payload.seq||0);status(N.started?'Game synchronized — mesh active':'Connected to room mesh — waiting for Host to start',true);closeModal();broadcastMesh(payload,fromPeer);}
+                    if(N.role==='client'&&payload.to===N.clientId){N.hostPeerId=payload.leader||N.hostPeerId;N.started=!!payload.started;N.phase=payload.phase||'lobby';apply(payload.state,payload.seq||0);N.ready=true;clearClientRecovering();status(N.started?'Game synchronized — mesh active':'Connected to room mesh — waiting for Host to start',true);closeModal();broadcastMesh(payload,fromPeer);}
                     return;
                 }
                 if(payload.type==='state'){
                     if(payload.to&&payload.to!==N.clientId)return;
-                    apply(payload.state,payload.seq||0);N.started=!!payload.started;N.phase=payload.phase||N.phase;if(N.role==='client'&&N.started)closeModal();broadcastMesh(payload,fromPeer);return;
+                    apply(payload.state,payload.seq||0);N.started=!!payload.started;N.phase=payload.phase||N.phase;if(N.role==='client'){N.ready=true;clearClientRecovering();}if(N.role==='client'&&N.started)closeModal();broadcastMesh(payload,fromPeer);return;
                 }
                 if(payload.type==='act'){
                     if(!rememberEvent(payload))return;
@@ -2531,32 +2716,127 @@
                 if(N.role!=='host'||N.mesh.size===0)return;N.seq++;const payload={type:'state',state:pack(),started:N.started,phase:N.phase,seq:N.seq,serverTs:Date.now()};broadcastMesh(payload);N.lastSnapshotAt=Date.now();
             }
             function startHostTimers(){clearInterval(N.clock);N.clock=setInterval(()=>{if(N.started)sendState();},SYNC_INTERVAL);}
-            function startClientWatchdog(){clearInterval(N.clientWatchdog);N.clientWatchdog=setInterval(()=>{if(N.role!=='client'||N.phase!=='playing')return;const stale=N.lastSnapshotAt&&Date.now()-N.lastSnapshotAt>WATCHDOG_STALE;if(stale&&!N.reconnecting){setHealth('warn','MESH SYNC STALE',true);scheduleMeshReconnect();}},2000);}
-            function scheduleMeshReconnect(){if(N.destroying||N.role!=='client')return;clearTimeout(N.recoveryTimer);N.reconnectAttempts=Math.min(N.reconnectAttempts+1,8);const delay=Math.min(RECONNECT_MAX,RECONNECT_BASE*Math.pow(1.7,Math.max(0,N.reconnectAttempts-1)))+Math.floor(Math.random()*350);N.reconnecting=true;setHealth('warn','RECONNECTING…',true);status(`Rejoining mesh in ${Math.ceil(delay/1000)}s…`,false);N.recoveryTimer=setTimeout(()=>{if(N.destroying||N.role!=='client')return;N.mesh.forEach((c,id)=>{if(id===N.hostPeerId){try{c.close();}catch{}}});N.mesh.delete(N.hostPeerId);connectPeer(N.hostPeerId);},delay);}
-            function manualReconnect(){if(N.role!=='client')return;clearTimeout(N.recoveryTimer);N.reconnectAttempts=0;N.reconnecting=false;setHealth('warn','RECONNECTING…',true);status('Rejoining the P2P mesh…',false);try{N.mesh.get(N.hostPeerId)?.close();}catch{}N.mesh.delete(N.hostPeerId);connectPeer(N.hostPeerId);}
-        
+            function startClientWatchdog(){
+                clearInterval(N.clientWatchdog);
+                N.clientWatchdog=setInterval(()=>{
+                    if(N.role!=='client'||N.phase!=='playing')return;
+                    const hc=hostConnection();
+                    const stale=N.lastSnapshotAt&&Date.now()-N.lastSnapshotAt>WATCHDOG_STALE;
+                    if(!hc){
+                        if(!N.networkRecovering){
+                            markClientRecovering('Host connection unavailable');
+                            clearTimeout(N.iceGraceTimer);
+                            N.iceGraceTimer=setTimeout(()=>{if(N.role==='client'&&!hostConnection())scheduleMeshReconnect('host unavailable');},ICE_DISCONNECT_GRACE);
+                        }
+                        return;
+                    }
+                    if(stale&&!N.networkRecovering){
+                        // During a network handover state sync may pause briefly; don't rebuild immediately.
+                        markClientRecovering('Game state sync delayed');
+                        clearTimeout(N.iceGraceTimer);
+                        N.iceGraceTimer=setTimeout(()=>{if(N.role==='client'&&hostConnection()&&N.lastSnapshotAt&&Date.now()-N.lastSnapshotAt>WATCHDOG_STALE) scheduleMeshReconnect('state stale');},ICE_DISCONNECT_GRACE);
+                    }
+                },2000);
+            }
+            function scheduleMeshReconnect(reason='connection issue'){
+                if(N.destroying||N.role!=='client')return;
+                if(!N.networkRecovering)N.networkRecovering=true;
+                clearTimeout(N.recoveryTimer);
+                N.reconnectAttempts=Math.min(N.reconnectAttempts+1,8);
+                const cycle=N.recoveryCycle;
+                const delay=Math.min(RECONNECT_MAX,RECONNECT_BASE*Math.pow(1.7,Math.max(0,N.reconnectAttempts-1)))+Math.floor(Math.random()*350);
+                setHealth('warn','RECONNECTING…',true);setInteractionLocked(true);
+                status(`Rejoining mesh in ${Math.ceil(delay/1000)}s…`,false);
+                N.recoveryTimer=setTimeout(()=>{
+                    if(N.destroying||N.role!=='client'||cycle!==N.recoveryCycle)return;
+                    rebuildClientPeer(reason);
+                },delay);
+            }
+            function rebuildClientPeer(reason='recovery'){
+                if(N.destroying||N.role!=='client')return;
+                N.recoveryCycle++;N.networkRecovering=true;N.reconnecting=true;N.ready=false;
+                clearTimeout(N.recoveryTimer);N.recoveryTimer=null;
+                N.mesh.forEach((c)=>{try{c.close();}catch{}});N.mesh.clear();N.pendingPeers.clear();
+                try{N.peer?.destroy();}catch{}N.peer=null;
+                setHealth('warn','RECONNECTING…',true);setInteractionLocked(state.activeTurn!==N.team || !N.started, {preserveInput:true});status(`Rebuilding network connection${reason?` · ${reason}`:''}…`,false);
+                const token=N.recoveryCycle;
+                setTimeout(()=>{if(N.destroying||N.role!=='client'||token!==N.recoveryCycle)return;createClientPeer();},650);
+            }
+            function manualReconnect(){if(N.role!=='client')return;N.reconnectAttempts=0;rebuildClientPeer('manual retry');}
             function renderPlayers(){const e=document.getElementById('or-players');if(!e)return;let b=0;N.players.forEach(p=>{if(p.team==='b')b++;});e.innerHTML=`🔵 Blue: 1 &nbsp; 🔴 Red: ${b}`;const start=document.getElementById('or-start'),note=document.getElementById('or-wait-note');if(start&&N.role==='host'){const ready=b>0;start.disabled=!ready;start.textContent=ready?'START GAME FOR EVERYONE':'WAITING FOR PLAYER…';start.className=ready?'solid-btn bg-emerald-400 text-slate-900 w-full py-2 mt-3 font-black':'solid-btn bg-slate-300 text-slate-500 w-full py-2 mt-3 font-black cursor-not-allowed';if(note)note.textContent=ready?'Player joined the mesh — Host can start the match.':'Waiting for a player to join the mesh…';}}
             function valid(a){return !!(a&&ACTIONS.includes(a.t));}
-            function run(a){if(a.t==='hangmanGuess')O.handleHangmanGuess(a.v);else if(a.t==='nextHangman')O.nextHangman();else if(a.t==='hintHangman')O.giveHangmanHint();else if(a.t==='skipHangman')O.skipHangmanPuzzle();else if(a.t==='quizSubmit'){const q=document.getElementById('quiz-input');q.value=a.v||'';O.handleQuizSubmit({preventDefault(){},target:q});}else if(a.t==='nextQuiz')O.nextQuiz();else if(a.t==='hintQuiz')O.giveQuizHint();else if(a.t==='revealQuiz')O.revealQuizAnswer();else if(a.t==='skipQuiz')O.skipQuizPuzzle();else if(a.t==='setTurn')O.setTeamTurn(a.v);else if(a.t==='reward')O.applyStreakReward(a.v);else if(a.t==='timeout')O.handleQuestionTimeout();}
-            function setInteractionLocked(lock){document.body.classList.toggle('online-waiting-turn',!!lock);['quiz-input','quiz-submit-btn','quiz-reveal-btn'].forEach(id=>{const e=document.getElementById(id);if(e)e.disabled=!!lock;});document.querySelectorAll('#view-hangman button, #view-play button').forEach(b=>{if(b.id==='sound-toggle'||b.closest('#optional-controls'))return;b.disabled=!!lock;});const inp=document.getElementById('quiz-input');if(inp){inp.placeholder=lock?'WAITING FOR OPPONENT…':'TYPE YOUR ANSWER…';inp.classList.toggle('opacity-50',!!lock);inp.classList.toggle('cursor-not-allowed',!!lock);}}
+            function run(a){
+                if(a.t==='nextHangman'||a.t==='nextQuiz')clearOnlineAutoAdvance();
+                const beforeAnswered=state.questionAnswered;
+                if(a.t==='hangmanGuess')O.handleHangmanGuess(a.v);
+                else if(a.t==='nextHangman')O.nextHangman();
+                else if(a.t==='hintHangman')O.giveHangmanHint();
+                else if(a.t==='skipHangman')O.skipHangmanPuzzle();
+                else if(a.t==='quizSubmit'){const q=document.getElementById('quiz-input');q.value=a.v||'';O.handleQuizSubmit({preventDefault(){},target:q});}
+                else if(a.t==='nextQuiz')O.nextQuiz();
+                else if(a.t==='hintQuiz')O.giveQuizHint();
+                else if(a.t==='revealQuiz')O.revealQuizAnswer();
+                else if(a.t==='skipQuiz')O.skipQuizPuzzle();
+                else if(a.t==='setTurn')O.setTeamTurn(a.v);
+                else if(a.t==='reward')O.applyStreakReward(a.v);
+                else if(a.t==='timeout')O.handleQuestionTimeout();
+                if(N.role==='host'&&!beforeAnswered&&state.questionAnswered)markOnlineQuestionResolved(a.t);
+            }
+            function setInteractionLocked(lock,opts={}){
+                const preserveInput=!!opts.preserveInput;
+                document.body.classList.toggle('online-waiting-turn',!!lock&&!preserveInput);
+                const quizInput=document.getElementById('quiz-input');
+                const shouldDisableInput=!!lock&&!preserveInput;
+                ['quiz-input'].forEach(id=>{const e=document.getElementById(id);if(e)e.disabled=shouldDisableInput;});
+                // Submit/reveal remain disabled during a hard lock, but when reconnecting on our turn
+                // they stay clickable and are queued by sendAct().
+                ['quiz-submit-btn','quiz-reveal-btn'].forEach(id=>{const e=document.getElementById(id);if(e)e.disabled=shouldDisableInput;});
+                document.querySelectorAll('#view-hangman button, #view-play button').forEach(b=>{
+                    if(b.id==='sound-toggle'||b.closest('#optional-controls'))return;
+                    b.disabled=shouldDisableInput;
+                });
+                if(quizInput){
+                    const onlineRecovering=N.role==='client'&&N.networkRecovering&&state.activeTurn===N.team&&N.started;
+                    quizInput.placeholder=onlineRecovering?'TYPE ANSWER — WILL SEND WHEN RECONNECTED':(lock?'WAITING FOR OPPONENT…':'TYPE YOUR ANSWER…');
+                    quizInput.classList.toggle('opacity-50',shouldDisableInput);
+                    quizInput.classList.toggle('cursor-not-allowed',shouldDisableInput);
+                }
+            }
             const O={};['handleHangmanGuess','nextHangman','giveHangmanHint','skipHangmanPuzzle','handleQuizSubmit','nextQuiz','giveQuizHint','revealQuizAnswer','skipQuizPuzzle','setTeamTurn','applyStreakReward','handleQuestionTimeout','endMatch'].forEach(n=>O[n]=window[n]);
-            function sendAct(a){if(N.started&&N.phase==='playing'&&N.ready&&N.team===state.activeTurn){const id=++N.actionSeq;const payload={type:'act',from:N.clientId,id,a,sentAt:Date.now()};rememberEvent(payload);broadcastMesh(payload);if(N.role==='host'){N.remote=true;try{run(a);}finally{N.remote=false;}sendState();}}}
-            window.handleHangmanGuess=function(v){if((N.role==='client'||N.role==='host')&&!N.remote&&N.phase==='playing'&&N.team===state.activeTurn){sendAct({t:'hangmanGuess',v});return;}const r=O.handleHangmanGuess.apply(this,arguments);if(N.role==='host'&&!N.remote)sendState();return r;};
-            window.nextHangman=function(){if(!N.remote&&N.phase==='playing'&&(N.role==='client'||N.role==='host')&&N.team===state.activeTurn){sendAct({t:'nextHangman'});return;}const r=O.nextHangman.apply(this,arguments);if(N.role==='host'&&!N.remote)sendState();return r;};
+            function sendAct(a,fromQueue=false){
+                if(!(N.started&&N.phase==='playing'&&N.team===state.activeTurn))return false;
+                const hc=N.role==='host'?null:hostConnection();
+                if(N.role==='client'&&(!N.ready||!hc)){
+                    if(!fromQueue)queueAction(a);
+                    return false;
+                }
+                const id=++N.actionSeq;const payload={type:'act',from:N.clientId,id,a,sentAt:Date.now(),turn:state.activeTurn,puzzle:state.currentPuzzleIndex};
+                rememberEvent(payload);broadcastMesh(payload);
+                if(N.role==='host'){N.remote=true;try{run(a);}finally{N.remote=false;}sendState();}
+                return true;
+            }
+            window.handleHangmanGuess=function(v){if((N.role==='client'||N.role==='host')&&!N.remote&&N.phase==='playing'&&N.team===state.activeTurn){sendAct({t:'hangmanGuess',v});return;}const before=state.questionAnswered;const r=O.handleHangmanGuess.apply(this,arguments);if(N.role==='host'&&!N.remote&&!before&&state.questionAnswered)markOnlineQuestionResolved('hangmanGuess');if(N.role==='host'&&!N.remote)sendState();return r;};
+            window.nextHangman=function(){if(!N.remote&&N.phase==='playing'&&(N.role==='client'||N.role==='host')&&N.team===state.activeTurn){if(!confirmOnlineManualNext('Hangman'))return;sendAct({t:'nextHangman'});return;}clearOnlineAutoAdvance();const r=O.nextHangman.apply(this,arguments);if(N.role==='host'&&!N.remote)sendState();return r;};
             window.giveHangmanHint=function(){if(!N.remote&&N.phase==='playing'&&(N.role==='client'||N.role==='host')){sendAct({t:'hintHangman'});return;}const r=O.giveHangmanHint.apply(this,arguments);if(N.role==='host'&&!N.remote)sendState();return r;};
             window.skipHangmanPuzzle=function(){if(!N.remote&&N.phase==='playing'&&(N.role==='client'||N.role==='host')&&N.team===state.activeTurn){sendAct({t:'skipHangman'});return;}const r=O.skipHangmanPuzzle.apply(this,arguments);if(N.role==='host'&&!N.remote)sendState();return r;};
-            window.handleQuizSubmit=function(e){if((N.role==='client'||N.role==='host')&&!N.remote&&N.phase==='playing'&&N.team===state.activeTurn){e.preventDefault();sendAct({t:'quizSubmit',v:document.getElementById('quiz-input')?.value||''});return;}const before=state.questionAnswered;const r=O.handleQuizSubmit.apply(this,arguments);if(N.role==='host'&&!N.remote){if(!before&&!state.questionAnswered)N.quizResetVersion++;sendState();}return r;};
-            window.nextQuiz=function(){if(!N.remote&&N.phase==='playing'&&(N.role==='client'||N.role==='host')&&N.team===state.activeTurn){sendAct({t:'nextQuiz'});return;}const r=O.nextQuiz.apply(this,arguments);if(N.role==='host'&&!N.remote)sendState();return r;};
+            window.handleQuizSubmit=function(e){if((N.role==='client'||N.role==='host')&&!N.remote&&N.phase==='playing'&&N.team===state.activeTurn){e.preventDefault();sendAct({t:'quizSubmit',v:document.getElementById('quiz-input')?.value||''});return;}const before=state.questionAnswered;const r=O.handleQuizSubmit.apply(this,arguments);if(N.role==='host'&&!N.remote){if(!before&&!state.questionAnswered)N.quizResetVersion++;if(!before&&state.questionAnswered)markOnlineQuestionResolved('quizSubmit');sendState();}return r;};
+            window.nextQuiz=function(){if(!N.remote&&N.phase==='playing'&&(N.role==='client'||N.role==='host')&&N.team===state.activeTurn){if(!confirmOnlineManualNext('Quiz'))return;sendAct({t:'nextQuiz'});return;}clearOnlineAutoAdvance();const r=O.nextQuiz.apply(this,arguments);if(N.role==='host'&&!N.remote)sendState();return r;};
             window.giveQuizHint=function(){if(!N.remote&&N.phase==='playing'&&(N.role==='client'||N.role==='host')){sendAct({t:'hintQuiz'});return;}const r=O.giveQuizHint.apply(this,arguments);if(N.role==='host'&&!N.remote)sendState();return r;};
-            window.revealQuizAnswer=function(){if(!N.remote&&N.phase==='playing'&&(N.role==='client'||N.role==='host')){sendAct({t:'revealQuiz'});return;}const r=O.revealQuizAnswer.apply(this,arguments);if(N.role==='host'&&!N.remote)sendState();return r;};
+            window.revealQuizAnswer=function(){if(!N.remote&&N.phase==='playing'&&(N.role==='client'||N.role==='host')){sendAct({t:'revealQuiz'});return;}const before=state.questionAnswered;const r=O.revealQuizAnswer.apply(this,arguments);if(N.role==='host'&&!N.remote&&!before&&state.questionAnswered)markOnlineQuestionResolved('revealQuiz');if(N.role==='host'&&!N.remote)sendState();return r;};
             window.skipQuizPuzzle=function(){if(!N.remote&&N.phase==='playing'&&(N.role==='client'||N.role==='host')&&N.team===state.activeTurn){sendAct({t:'skipQuiz'});return;}const r=O.skipQuizPuzzle.apply(this,arguments);if(N.role==='host'&&!N.remote)sendState();return r;};
             window.setTeamTurn=function(v){if(!N.remote&&N.phase==='playing'&&(N.role==='client'||N.role==='host')){sendAct({t:'setTurn',v});return;}const r=O.setTeamTurn.apply(this,arguments);if(N.role==='host'&&!N.remote)sendState();return r;};
             window.applyStreakReward=function(v){if(!N.remote&&N.phase==='playing'&&(N.role==='client'||N.role==='host')){sendAct({t:'reward',v});return;}const r=O.applyStreakReward.apply(this,arguments);if(N.role==='host'&&!N.remote)sendState();return r;};
-            window.handleQuestionTimeout=function(){if(!N.remote&&N.phase==='playing'&&(N.role==='client'||N.role==='host')){sendAct({t:'timeout'});return;}const r=O.handleQuestionTimeout.apply(this,arguments);if(N.role==='host'&&!N.remote)sendState();return r;};
+            window.handleQuestionTimeout=function(){if(!N.remote&&N.phase==='playing'&&(N.role==='client'||N.role==='host')){sendAct({t:'timeout'});return;}const before=state.questionAnswered;const r=O.handleQuestionTimeout.apply(this,arguments);if(N.role==='host'&&!N.remote&&!before&&state.questionAnswered)markOnlineQuestionResolved('timeout');if(N.role==='host'&&!N.remote)sendState();return r;};
             window.endMatch=function(){const r=O.endMatch.apply(this,arguments);if(N.role==='host'&&!N.remote){N.phase='ended';N.started=false;stopCurrentQuestionTimer();clearInterval(N.clock);sendState();}return r;};
         
             function acceptRemoteAction(payload){
-                if(!payload?.from||!Number.isInteger(payload.id)||!valid(payload.a))return false;const p=N.players.get(payload.from);if(!p||p.team!=='b'||state.activeTurn!=='b'||N.phase!=='playing')return false;return true;
+                if(!payload?.from||!Number.isInteger(payload.id)||!valid(payload.a))return false;
+                const p=N.players.get(payload.from);
+                if(!p||p.team!=='b'||state.activeTurn!=='b'||N.phase!=='playing')return false;
+                if(payload.turn&&payload.turn!==state.activeTurn)return false;
+                if(Number.isInteger(payload.puzzle)&&payload.puzzle!==state.currentPuzzleIndex)return false;
+                if(payload.sentAt&&Date.now()-payload.sentAt>15000)return false;
+                return true;
             }
             const PEER_SERVER={}; // Use PeerJS Cloud defaults exactly; explicit cloud host/SSL overrides can cause incompatibilities.
             // Public Open Relay TURN fallback. Direct/STUN is tried first; TURN is only used when needed.
@@ -2574,17 +2854,25 @@
             function createHostPeer(){
                 const gen=N.generation;N.hostPeerId=peerIdForCode(N.code);N.connecting=true;
                 try{N.peer=new Peer(N.hostPeerId,peerOptions(2));}catch{status('Could not start online room.',false);setHealth('bad','ONLINE ERROR',false);return;}
-                N.peer.on('open',id=>{if(gen!==N.generation)return;N.ready=true;N.connecting=false;setHealth('ok','MESH ONLINE · 0 PEERS',false);startHostTimers();renderPlayers();status('Room ready — waiting for players to join the mesh',true);});
+                N.peer.on('open',id=>{if(gen!==N.generation)return;N.ready=true;N.connecting=false;N.networkRecovering=false;setInteractionLocked(false);setHealth('ok','MESH ONLINE · 0 PEERS',false);startHostTimers();renderPlayers();status('Room ready — waiting for players to join the mesh',true);});
                 N.peer.on('connection',conn=>{if(gen!==N.generation)return;const pid=conn.peer;N.mesh.set(pid,conn);attachMeshConnection(conn,pid,true);});
-                N.peer.on('disconnected',()=>{if(gen!==N.generation)return;N.ready=false;setHealth('warn','SIGNALING RECOVERING…',true);status('Signaling connection lost — reconnecting…',false);try{N.peer.reconnect();}catch{}});
+                N.peer.on('disconnected',()=>{if(gen!==N.generation||N.destroying)return;N.ready=false;N.networkRecovering=true;setInteractionLocked(true);setHealth('warn','SIGNALING RECOVERING…',true);status('Signaling connection lost — reconnecting…',false);try{N.peer.reconnect();}catch{} });
                 N.peer.on('error',err=>{if(gen!==N.generation)return;console.warn('[Emoji Rebus Mesh] Host peer error',err);const t=peerErrorText(err);if(err.type==='unavailable-id'){setHealth('bad','ROOM ID BUSY',false);status('This room code is currently busy. Create a new room.',false);}else{setHealth('bad',`ONLINE ERROR · ${t}`,false);status(`Online error: ${t}. Retry or create a new room.`,false);}});
             }
             function createClientPeer(){
                 const gen=N.generation;N.connecting=true;
                 try{N.peer=new Peer(undefined,peerOptions(2));}catch{status('Could not start online connection.',false);return;}
-                N.peer.on('open',()=>{if(gen!==N.generation)return;N.connecting=false;setHealth('warn','CONNECTING TO HOST…',true);status('Signaling connected — opening WebRTC data channel…',true);connectPeer(N.hostPeerId);clearTimeout(N.stateTimer);N.stateTimer=setTimeout(()=>{if(gen===N.generation&&!N.mesh.has(N.hostPeerId)){setHealth('bad','HOST NOT REACHABLE',true);status('WebRTC connection failed after signaling. The browser could not establish a usable ICE path. Retry will rebuild the connection.',false);}},MAX_JOIN_WAIT);});
-                N.peer.on('disconnected',()=>{if(gen!==N.generation)return;setHealth('warn','SIGNALING RECOVERING…',true);status('Signaling connection lost — reconnecting…',false);try{N.peer.reconnect();}catch{scheduleMeshReconnect();}});
-                N.peer.on('error',err=>{if(gen!==N.generation)return;console.warn('[Emoji Rebus Mesh] Client peer error',err);const t=peerErrorText(err);setHealth('bad',`ONLINE ERROR · ${t}`,true);status(`Online error: ${t}. Retrying…`,false);scheduleMeshReconnect();});
+                N.peer.on('open',()=>{if(gen!==N.generation||N.destroying)return;N.connecting=false;
+                    setHealth('warn','CONNECTING TO HOST…',true);status('Signaling connected — opening WebRTC data channel…',true);
+                    clearTimeout(N.stateTimer);connectPeer(N.hostPeerId);
+                    N.stateTimer=setTimeout(()=>{if(gen===N.generation&&N.role==='client'&&!hostConnection()){markClientRecovering('Host data channel not ready');scheduleMeshReconnect('data channel timeout');}},MAX_JOIN_WAIT);
+                });
+                N.peer.on('disconnected',()=>{if(gen!==N.generation||N.destroying)return;
+                    if(!N.networkRecovering){markClientRecovering('Signaling connection lost');try{N.peer.reconnect();}catch{scheduleMeshReconnect('signaling reconnect failed');}}
+                });
+                N.peer.on('error',err=>{if(gen!==N.generation||N.destroying)return;console.warn('[Emoji Rebus Mesh] Client peer error',err);const t=peerErrorText(err);
+                    markClientRecovering(`Online error: ${t}`);scheduleMeshReconnect('peer error');
+                });
                 startClientWatchdog();
             }
             function create(){
