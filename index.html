@@ -310,6 +310,7 @@
     <!-- INTRO / GAME MENU OVERLAY -->
     <div id="intro-overlay" class="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900 overflow-hidden p-2 sm:p-4">
         <div id="intro-card" class="bg-white border-4 border-slate-900 shadow-[8px_8px_0px_0px_#facc15] rounded-2xl w-full max-w-lg p-4 sm:p-6 flex flex-col items-center gap-3 sm:gap-4 text-center animate-menu-in relative max-h-[96vh] overflow-y-auto custom-scroll">
+            <button id="intro-lang-toggle" onclick="toggleLanguage()" class="absolute top-2 right-2 solid-btn bg-slate-100 text-slate-900 px-2.5 py-1 text-[11px] font-black" aria-label="Change language">TH</button>
 
             <div class="animate-float shrink-0">
                 <div class="text-4xl sm:text-6xl mb-1">🧩</div>
@@ -328,57 +329,57 @@
 
             <!-- STEP 1: Choose Activity and Player Mode -->
             <div id="intro-step-1" class="w-full flex flex-col items-center gap-3 shrink-0">
-                <div class="text-xs font-black text-slate-500 uppercase tracking-widest">STEP 1 — CHOOSE AN ACTIVITY</div>
+                <div id="i18n-step1" class="text-xs font-black text-slate-500 uppercase tracking-widest">STEP 1 — CHOOSE AN ACTIVITY</div>
 
                 <div class="grid grid-cols-3 gap-2 w-full">
                     <button id="intro-activity-hangman" onclick="selectIntroActivity('hangman')" class="intro-activity-option solid-btn bg-yellow-400 text-slate-900 p-2 sm:p-3 flex flex-col items-center gap-1 transition-all border-3 border-slate-900 rounded-xl selected">
                         <span class="text-2xl sm:text-3xl">💀</span>
-                        <span class="text-[10px] sm:text-xs font-black uppercase">Hangman</span>
+                        <span id="i18n-hangman">Hangman</span>
                     </button>
                     <button id="intro-activity-play" onclick="selectIntroActivity('play')" class="intro-activity-option solid-btn bg-white text-slate-900 p-2 sm:p-3 flex flex-col items-center gap-1 transition-all border-3 border-slate-900 rounded-xl">
                         <span class="text-2xl sm:text-3xl">⌨️</span>
-                        <span class="text-[10px] sm:text-xs font-black uppercase">Quiz</span>
+                        <span id="i18n-quiz">Quiz</span>
                     </button>
                     <button id="intro-activity-vocab" onclick="selectIntroActivity('vocab')" class="intro-activity-option solid-btn bg-white text-slate-900 p-2 sm:p-3 flex flex-col items-center gap-1 transition-all border-3 border-slate-900 rounded-xl">
                         <span class="text-2xl sm:text-3xl">📚</span>
-                        <span class="text-[10px] sm:text-xs font-black uppercase">Study</span>
+                        <span id="i18n-study">Study</span>
                     </button>
                 </div>
 
                 <div id="intro-player-mode-section" class="w-full flex flex-col items-center gap-3">
-                    <div class="text-xs font-black text-slate-500 uppercase tracking-widest">SELECT PLAYER MODE</div>
+                    <div id="i18n-player-mode" class="text-xs font-black text-slate-500 uppercase tracking-widest">SELECT PLAYER MODE</div>
 
                 <div class="grid grid-cols-2 gap-3 w-full">
                     <button id="intro-opt-solo" onclick="selectIntroMode('solo')" class="intro-option solid-btn bg-white text-slate-900 p-3 sm:p-4 flex flex-col items-center gap-1.5 transition-all border-4 border-slate-900 rounded-2xl selected">
                         <span class="text-3xl sm:text-4xl">🧘‍♂️</span>
-                        <span class="text-xs sm:text-sm font-black uppercase font-display">Single Player</span>
-                        <span class="text-[10px] font-bold text-slate-500">Play independently and test your vocabulary skills at your own pace.</span>
+                        <span id="i18n-single-player" class="text-xs sm:text-sm font-black uppercase font-display">Single Player</span>
+                        <span class="text-[10px] font-bold text-slate-500"><span id="i18n-single-desc">Play independently and test your vocabulary skills at your own pace.</span></span>
                     </button>
                     <button id="intro-opt-team" onclick="selectIntroMode('team')" class="intro-option solid-btn bg-white text-slate-900 p-3 sm:p-4 flex flex-col items-center gap-1.5 transition-all border-4 border-slate-900 rounded-2xl">
                         <span class="text-3xl sm:text-4xl">⚔️</span>
-                        <span class="text-xs sm:text-sm font-black uppercase font-display">Multiplayer</span>
-                        <span class="text-[10px] font-bold text-slate-500">Blue Team vs Red Team head-to-head competitive puzzle challenge.</span>
+                        <span id="i18n-multiplayer" class="text-xs sm:text-sm font-black uppercase font-display">Multiplayer</span>
+                        <span class="text-[10px] font-bold text-slate-500"><span id="i18n-multi-desc">Blue Team vs Red Team head-to-head competitive puzzle challenge.</span></span>
                     </button>
                 </div>
 
                 <div id="intro-online-options" class="hidden w-full flex flex-col items-center gap-2.5 mt-1">
-                    <div class="text-xs font-black text-slate-500 uppercase tracking-widest">MULTIPLAYER SETUP</div>
+                    <div id="i18n-mp-setup" class="text-xs font-black text-slate-500 uppercase tracking-widest">MULTIPLAYER SETUP</div>
                     <div class="grid grid-cols-3 gap-2 w-full">
                         <button id="intro-online-host" onclick="selectOnlineMode('host')" class="online-mode-option solid-btn bg-white text-slate-900 p-2.5 flex flex-col items-center gap-1 border-3 border-slate-900 rounded-xl">
-                            <span class="text-2xl">👑</span><span class="text-[10px] sm:text-xs font-black uppercase">Host Online</span>
+                            <span class="text-2xl">👑</span><span id="i18n-host-online">Host Online</span>
                         </button>
                         <button id="intro-online-join" onclick="selectOnlineMode('join')" class="online-mode-option solid-btn bg-white text-slate-900 p-2.5 flex flex-col items-center gap-1 border-3 border-slate-900 rounded-xl">
-                            <span class="text-2xl">🔗</span><span class="text-[10px] sm:text-xs font-black uppercase">Join Online</span>
+                            <span class="text-2xl">🔗</span><span id="i18n-join-online">Join Online</span>
                         </button>
                         <button id="intro-online-local" onclick="selectOnlineMode('local')" class="online-mode-option solid-btn bg-yellow-400 text-slate-900 p-2.5 flex flex-col items-center gap-1 border-3 border-slate-900 rounded-xl selected">
-                            <span class="text-2xl">🖥️</span><span class="text-[10px] sm:text-xs font-black uppercase">Continue Here</span>
+                            <span class="text-2xl">🖥️</span><span id="i18n-continue-here">Continue Here</span>
                         </button>
                     </div>
                     <div id="intro-online-team-wrap" class="w-full">
-                        <div class="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">YOUR ONLINE TEAM</div>
+                        <div id="i18n-online-team" class="text-[10px] font-black text-slate-500 uppercase tracking-widest mb-1">YOUR ONLINE TEAM</div>
                         <div class="grid grid-cols-2 gap-2">
-                            <button id="intro-online-team-a" onclick="selectOnlineTeam('a')" class="online-team-option solid-btn bg-blue-200 text-slate-900 py-2 font-black selected">🔵 BLUE TEAM</button>
-                            <button id="intro-online-team-b" onclick="selectOnlineTeam('b')" class="online-team-option solid-btn bg-red-100 text-slate-900 py-2 font-black">🔴 RED TEAM</button>
+                            <button id="intro-online-team-a" onclick="selectOnlineTeam('a')" class="online-team-option solid-btn bg-blue-200 text-slate-900 py-2 font-black selected">🔵 <span id="i18n-blue-team">BLUE TEAM</span></button>
+                            <button id="intro-online-team-b" onclick="selectOnlineTeam('b')" class="online-team-option solid-btn bg-red-100 text-slate-900 py-2 font-black">🔴 <span id="i18n-red-team">RED TEAM</span></button>
                         </div>
                     </div>
                     <div id="intro-join-code-wrap" class="hidden w-full">
@@ -396,7 +397,7 @@
 
             <!-- STEP 2: Choose Difficulty -->
             <div id="intro-step-2" class="hidden w-full flex flex-col items-center gap-2.5 shrink-0">
-                <div class="text-xs font-black text-slate-500 uppercase tracking-widest">STEP 2 — SELECT DIFFICULTY</div>
+                <div id="i18n-step2" class="text-xs font-black text-slate-500 uppercase tracking-widest">STEP 2 — SELECT DIFFICULTY</div>
                 <div class="flex flex-col gap-2 w-full">
                     
                     <!-- Hard -->
@@ -449,16 +450,16 @@
 
                 </div>
                 <div class="flex gap-2.5 w-full mt-1">
-                    <button onclick="goIntroStep(1)" class="solid-btn bg-slate-200 text-slate-900 py-2.5 px-4 font-black text-xs sm:text-sm uppercase">← BACK</button>
+                    <button id="i18n-back-2" onclick="goIntroStep(1)" class="solid-btn bg-slate-200 text-slate-900 py-2.5 px-4 font-black text-xs sm:text-sm uppercase">← BACK</button>
                     <button onclick="goIntroStep(3)" id="intro-next-btn-2" class="solid-btn flex-1 bg-yellow-400 text-slate-900 py-2.5 font-black text-xs sm:text-sm uppercase">
-                        NEXT STEP →
+                        <span id="i18n-next-step">NEXT STEP →</span>
                     </button>
                 </div>
             </div>
 
             <!-- STEP 3: Setup Avatars & Match Time -->
             <div id="intro-step-3" class="hidden w-full flex flex-col items-center gap-3 shrink-0">
-                <div class="text-xs font-black text-slate-500 uppercase tracking-widest">STEP 3 — AVATARS & MATCH DURATION</div>
+                <div id="i18n-step3" class="text-xs font-black text-slate-500 uppercase tracking-widest">STEP 3 — AVATARS & MATCH DURATION</div>
                 
                 <!-- Single Player Avatar Picker -->
                 <div id="avatar-section-solo" class="w-full text-left">
@@ -513,7 +514,7 @@
                 </div>
 
                 <div class="w-full text-left mt-1">
-                    <label class="text-[11px] font-black uppercase text-slate-700 bg-slate-100 px-2 py-0.5 rounded border-2 border-slate-300">2. MATCH DURATION (TOTAL MINUTES)</label>
+                    <label id="i18n-duration-label" class="text-[11px] font-black uppercase text-slate-700 bg-slate-100 px-2 py-0.5 rounded border-2 border-slate-300">2. MATCH DURATION (TOTAL MINUTES)</label>
                     <div class="grid grid-cols-4 gap-2 mt-1.5">
                         <button class="dur-btn solid-btn bg-white py-1.5 text-xs font-black selected" onclick="selectDuration(this, 5)">5 Min</button>
                         <button class="dur-btn solid-btn bg-white py-1.5 text-xs font-black" onclick="selectDuration(this, 10)">10 Min</button>
@@ -523,9 +524,9 @@
                 </div>
 
                 <div class="flex gap-2.5 w-full mt-2">
-                    <button onclick="goIntroStep(2)" class="solid-btn bg-slate-200 text-slate-900 py-2.5 px-4 font-black text-xs sm:text-sm uppercase">← BACK</button>
+                    <button id="i18n-back-3" onclick="goIntroStep(2)" class="solid-btn bg-slate-200 text-slate-900 py-2.5 px-4 font-black text-xs sm:text-sm uppercase">← BACK</button>
                     <button onclick="startGameFromMenu()" id="intro-start-btn" class="solid-btn flex-1 bg-emerald-400 text-slate-900 py-2.5 font-black text-sm sm:text-base uppercase tracking-wide">
-                        🎮 START GAME
+                        🎮 <span id="i18n-start-game">START GAME</span>
                     </button>
                 </div>
             </div>
@@ -545,6 +546,7 @@
             </div>
 
             <div id="game-controls" class="flex items-center gap-1.5 sm:gap-2 flex-wrap">
+                <button id="header-lang-toggle" onclick="toggleLanguage()" class="solid-btn bg-slate-100 text-slate-900 px-2 py-1.5 text-xs font-black" title="Change language">TH</button>
                 <button onclick="requestHomeNavigation()" class="solid-btn bg-red-600 hover:bg-red-700 text-white px-2.5 sm:px-3 py-1.5 text-xs md:text-sm font-black flex items-center gap-1" title="Return to Main Menu">
                     🏠 <span class="header-compact-label">Home</span>
                 </button>
@@ -1215,7 +1217,7 @@
 
             const isStudy = activity === 'vocab';
             document.getElementById('intro-player-mode-section').classList.toggle('hidden', isStudy);
-            document.getElementById('intro-next-btn-1').textContent = isStudy ? 'START VOCABULARY STUDY →' : 'PROCEED TO DIFFICULTY →';
+            document.getElementById('intro-next-btn-1').textContent = isStudy ? I18N[uiLanguage].vocabStart : (tempOnlineMode==='join' ? I18N[uiLanguage].joinRoom : I18N[uiLanguage].proceed);
             playSFX('click');
         }
 
@@ -1230,7 +1232,7 @@
             if (tempIntroMode === 'team' && tempOnlineMode === 'join') {
                 const code = (document.getElementById('intro-join-code')?.value || '').trim().toUpperCase();
                 if (!/^[A-Z0-9]{6}$/.test(code)) {
-                    document.getElementById('intro-online-help').textContent = 'Enter a valid 6-character room code first.';
+                    document.getElementById('intro-online-help').textContent = I18N[uiLanguage].invalidCode;
                     document.getElementById('intro-online-help').className = 'text-[10px] font-bold text-red-600 text-center';
                     return;
                 }
@@ -1254,7 +1256,7 @@
             document.querySelectorAll('.intro-option').forEach(el => el.classList.remove('selected'));
             if (mode === 'solo') {
                 document.getElementById('intro-opt-solo').classList.add('selected');
-                document.getElementById('intro-next-btn-1').textContent = 'PROCEED TO DIFFICULTY →';
+                document.getElementById('intro-next-btn-1').textContent = I18N[uiLanguage].proceed;
             } else document.getElementById('intro-opt-team').classList.add('selected');
             const online = document.getElementById('intro-online-options');
             online.classList.toggle('hidden', mode !== 'team');
@@ -1285,16 +1287,16 @@
             teamWrap.classList.add('hidden');
             if (mode === 'host') {
                 tempOnlineTeam = 'a';
-                help.textContent = 'Host = 🔵 Blue Team. Choose difficulty, create the room, wait for a player to join, then start the match.';
-                document.getElementById('intro-next-btn-1').textContent = 'PROCEED TO DIFFICULTY →';
+                help.textContent = I18N[uiLanguage].hostHelp;
+                document.getElementById('intro-next-btn-1').textContent = I18N[uiLanguage].proceed;
             } else if (mode === 'join') {
                 tempOnlineTeam = 'b';
-                help.textContent = 'Join = 🔴 Red Team. Enter the 6-character room code, or open the invite link. Difficulty and game start are controlled by the Host.';
-                document.getElementById('intro-next-btn-1').textContent = 'JOIN ROOM →';
+                help.textContent = I18N[uiLanguage].joinHelp;
+                document.getElementById('intro-next-btn-1').textContent = I18N[uiLanguage].joinRoom;
             } else {
                 tempOnlineTeam = 'a';
-                help.textContent = 'Continue Here keeps the existing two-team / same-device multiplayer behavior.';
-                document.getElementById('intro-next-btn-1').textContent = 'PROCEED TO DIFFICULTY →';
+                help.textContent = I18N[uiLanguage].localHelp;
+                document.getElementById('intro-next-btn-1').textContent = I18N[uiLanguage].proceed;
             }
             help.className = 'text-[10px] font-bold text-slate-500 text-center';
             playSFX('click');
@@ -2341,7 +2343,8 @@
             document.getElementById('slide-category-header').textContent = `CATEGORY: ${puzzle.category}`;
             state.vocabSlideAnswerRevealed = false;
             const meaning = getPuzzleMeaning(puzzle);
-            document.getElementById('slide-answer-container').innerHTML = `<div>${esc(puzzle.answer)}</div>${meaning ? `<div class="text-xs sm:text-sm md:text-base font-bold text-white/80 mt-1 tracking-normal">${esc(meaning)}</div>` : ''}`;
+            const thai = typeof getThaiMeaning==='function' ? getThaiMeaning(puzzle) : '';
+            document.getElementById('slide-answer-container').innerHTML = `<div>${esc(puzzle.answer)}</div>${meaning ? `<div class="text-xs sm:text-sm md:text-base font-bold text-white/80 mt-1 tracking-normal">${esc(meaning)}</div>` : ''}${thai && uiLanguage==='th' ? `<div class="thai-meaning text-xs sm:text-sm font-black text-yellow-200 mt-1">${esc(thai)}</div>` : ''}`;
             document.getElementById('slide-answer-container').classList.add('hidden');
             document.getElementById('slide-prompt-text').classList.remove('hidden');
             document.getElementById('slide-question-mark').classList.remove('hidden');
@@ -2428,7 +2431,7 @@
                     <div class="text-xs font-bold text-slate-500 uppercase">${puzzle.category}</div>
                     <div class="text-2xl sm:text-3xl my-1">${puzzle.part1} + ${puzzle.part2}</div>
                     <div class="text-sm sm:text-base font-black text-blue-900 bg-blue-50 px-2 py-0.5 rounded border border-blue-200">${puzzle.answer}</div>
-                    <div class="text-[10px] sm:text-xs font-bold text-slate-600 px-1 leading-tight">${esc(getPuzzleMeaning(puzzle))}</div>
+                    <div class="text-[10px] sm:text-xs font-bold text-slate-600 px-1 leading-tight">${esc(getPuzzleMeaning(puzzle))}</div>${uiLanguage==='th' && getThaiMeaning(puzzle) ? `<div class="text-[10px] sm:text-xs font-black text-slate-800 px-1 leading-tight">${esc(getThaiMeaning(puzzle))}</div>` : ''}
                 `;
                 container.appendChild(card);
             });
@@ -2469,6 +2472,136 @@
         pickNextPuzzle();
 
 
+        // ================================================================
+        // BILINGUAL UI / THAI ACCESSIBILITY
+        // Default language is English; user may switch to Thai.
+        // ================================================================
+        const LANGUAGE_KEY = 'emoji_rebus_language_v1';
+        let uiLanguage = 'en';
+        const TH_MEANINGS = {
+          KEYBOARD:'แป้นพิมพ์', SUNFLOWER:'ดอกทานตะวัน', BUTTERFLY:'ผีเสื้อ', RAINBOW:'สายรุ้ง', STARFISH:'ปลาดาว', FIREFLY:'หิ่งห้อย', PANCAKE:'แพนเค้ก', SNOWMAN:'ตุ๊กตาหิมะ', FOOTBALL:'ฟุตบอล', HOTDOG:'ฮอตดอก', WATERMELON:'แตงโม', POPCORN:'ป๊อปคอร์น', HONEYBEE:'ผึ้งน้ำผึ้ง', NIGHTLIGHT:'ไฟกลางคืน', HOMEWORK:'การบ้าน', TOOTHBRUSH:'แปรงสีฟัน', SEASHELL:'เปลือกหอย', HIGHWAY:'ทางหลวง', DRAGONFLY:'แมลงปอ', STRAWBERRY:'สตรอว์เบอร์รี', RAINCOAT:'เสื้อกันฝน', CAMPFIRE:'กองไฟ', EARRING:'ต่างหู', LIGHTHOUSE:'ประภาคาร', JELLYFISH:'แมงกะพรุน', PINEAPPLE:'สับปะรด', DOORBELL:'กริ่งประตู', BREAKFAST:'อาหารเช้า', BEDROOM:'ห้องนอน', SMARTPHONE:'สมาร์ตโฟน', SUNSHINE:'แสงแดด', AIRPLANE:'เครื่องบิน', EARPHONE:'หูฟัง', BOOKCASE:'ตู้หนังสือ', LADYBUG:'เต่าทอง', CROSSWORD:'ปริศนาอักษรไขว้', PLAYGROUND:'สนามเด็กเล่น', FOOTPRINT:'รอยเท้า', SANDCASTLE:'ปราสาททราย', FIREWORK:'ดอกไม้ไฟ', JELLYBEAN:'เยลลี่บีน', RAINDROP:'หยดฝน', SNOWFLAKE:'เกล็ดหิมะ', BLACKBOARD:'กระดานดำ', GOLDFISH:'ปลาทอง', BULLDOG:'สุนัขพันธุ์บูลด็อก', CATFISH:'ปลาดุก', SHIPWRECK:'เรืออับปาง', LIPSTICK:'ลิปสติก', HAIRCUT:'การตัดผม', EYEGLASSES:'แว่นตา', ICEBERG:'ภูเขาน้ำแข็ง', FOOTSTEP:'รอยเท้า/เสียงฝีเท้า', SEAHORSE:'ม้าน้ำ', HANDSHAKE:'การจับมือ', BOWTIE:'หูกระต่าย', NEWSLETTER:'จดหมายข่าว', KEYHOLE:'รูกุญแจ', MOONLIGHT:'แสงจันทร์', THUNDERSTORM:'พายุฝนฟ้าคะนอง', EARTHQUAKE:'แผ่นดินไหว', HEARTBEAT:'การเต้นของหัวใจ', LIFEGUARD:'เจ้าหน้าที่กู้ภัยทางน้ำ', WHEELCHAIR:'รถเข็นผู้พิการ', FISHHOOK:'เบ็ดตกปลา', CANDLESTICK:'เชิงเทียน', FIREMAN:'นักดับเพลิง', SNOWBALL:'ก้อนหิมะ', SKYSCRAPER:'ตึกระฟ้า', BOOKMARK:'ที่คั่นหนังสือ', RAINBOOTS:'รองเท้าบู๊ตกันฝน', BRAINSTORM:'การระดมความคิด', TIMELINE:'ลำดับเวลา', FOOTWEAR:'รองเท้า', WATERFALL:'น้ำตก', PASSBOOK:'สมุดบัญชี', OVERCOAT:'เสื้อโค้ตกันหนาว', UNDERGROUND:'ใต้ดิน', BACKPACK:'กระเป๋าเป้', TOWNHOUSE:'ทาวน์เฮาส์', STREETLIGHT:'ไฟถนน', CROSSROAD:'สี่แยก/ทางแยก', RIVERBED:'ท้องแม่น้ำ', SUNSET:'พระอาทิตย์ตก', SUNRISE:'พระอาทิตย์ขึ้น', AIRMAIL:'ไปรษณีย์อากาศ', BOOKSTORE:'ร้านหนังสือ', DRIVEWAY:'ทางรถเข้าบ้าน', HANDBAG:'กระเป๋าถือ', HEADPHONE:'หูฟัง', MATCHBOX:'กล่องไม้ขีด', KEYNOTE:'สาระสำคัญ/คำปราศรัยหลัก', SUNGLASSES:'แว่นกันแดด', RAINSTORM:'พายุฝน', HORSESHOE:'เกือกม้า', BUTTERMILK:'บัตเตอร์มิลค์', SOAPBUBBLE:'ฟองสบู่', WOODCUTTER:'คนตัดไม้', CUPCAKE:'คัพเค้ก', TEAPOT:'กาน้ำชา', BASEBALL:'เบสบอล', BASKETBALL:'บาสเกตบอล', SWEETHEART:'คนรัก/ที่รัก', FIREPLACE:'เตาผิง', BLUEBERRY:'บลูเบอร์รี', BLACKBERRY:'แบล็กเบอร์รี', HANDWRITING:'ลายมือ', DAYLIGHT:'แสงกลางวัน', WATERPROOF:'กันน้ำ', FIRETRUCK:'รถดับเพลิง', POLICEMAN:'ตำรวจชาย', MAILBOX:'ตู้ไปรษณีย์', POSTCARD:'ไปรษณียบัตร', AIRPORT:'สนามบิน', SEAFOOD:'อาหารทะเล', SEASHORE:'ชายฝั่งทะเล', BEDSIDE:'ข้างเตียง', BACKBONE:'กระดูกสันหลัง/แกนหลัก', TOOTHPASTE:'ยาสีฟัน', EYEBROW:'คิ้ว', EYELASH:'ขนตา', SNOWSTORM:'พายุหิมะ', DUSTBIN:'ถังขยะ', WINDMILL:'กังหันลม', WATERLILY:'ดอกบัว', WALLPAPER:'วอลเปเปอร์', NEWSPAPER:'หนังสือพิมพ์', NOTEBOOK:'สมุดบันทึก', TEXTBOOK:'หนังสือเรียน', PLAYLIST:'รายการเพลง', WORKBOOK:'แบบฝึกหัด', AUDIOBOOK:'หนังสือเสียง', PLAYSTORE:'เพลย์สโตร์', WORKSHOP:'เวิร์กช็อป', COWBOY:'คาวบอย', HORSEPOWER:'แรงม้า', SUNLIGHT:'แสงอาทิตย์', MOONWALK:'มูนวอล์ก/ท่าเดินถอยหลัง', STARLIGHT:'แสงดาว', NIGHTCLUB:'ไนต์คลับ', DAYBREAK:'รุ่งเช้า', WEEKEND:'วันหยุดสุดสัปดาห์', BASEBOARD:'บัวเชิงผนัง', KEYPAD:'แป้นปุ่มกด', DOORMAT:'พรมเช็ดเท้าหน้าประตู', RAINWEAR:'เครื่องแต่งกายกันฝน', FOOTREST:'ที่วางเท้า', HANDSTAND:'ท่ายืนด้วยมือ', HAIRPIN:'กิ๊บติดผม', EYEBALL:'ลูกตา', BRAINPOWER:'พลังสมอง', FIRECRACKER:'ประทัด', WATERPIPE:'ท่อน้ำ', EARTHWORM:'ไส้เดือน', SNOWDRIFT:'กองหิมะ', SEAWEED:'สาหร่ายทะเล', BEACHBALL:'ลูกบอลชายหาด', RIVERBANK:'ตลิ่งแม่น้ำ', MOUNTAINSIDE:'ไหล่เขา', HIGHLIGHT:'จุดเด่น/ไฮไลต์', DOWNTOWN:'ย่านใจกลางเมือง', UPTOWN:'ย่านเมืองตอนบน', OUTDOORS:'กลางแจ้ง', INDOORS:'ในอาคาร', OUTSIDE:'ด้านนอก', INSIDE:'ด้านใน', SUNBURN:'ผิวไหม้แดด', RAINSHOWER:'ฝนซู่', CLOCKWORK:'กลไกนาฬิกา', TIMEKEEPER:'ผู้จับเวลา', WATCHMAN:'ยามรักษาการณ์', POLICEWOMAN:'ตำรวจหญิง', NEWSROOM:'ห้องข่าว', CLASSROOM:'ห้องเรียน', BALLROOM:'ห้องเต้นรำ', RESTROOM:'ห้องน้ำ', BATHROOM:'ห้องน้ำ/ห้องอาบน้ำ', TEASPOON:'ช้อนชา', TABLESPOON:'ช้อนโต๊ะ', TABLECLOTH:'ผ้าปูโต๊ะ', BEDSPREAD:'ผ้าคลุมเตียง', DOORSTEP:'ขั้นบันไดหน้าประตู', TAXICAB:'แท็กซี่', FIREHOUSE:'สถานีดับเพลิง', WAREHOUSE:'คลังสินค้า', GREENHOUSE:'เรือนกระจก', THUNDERBOLT:'สายฟ้า', WATERCOLOR:'สีน้ำ', PAINTBRUSH:'พู่กัน', ARTWORK:'งานศิลปะ', NETWORK:'เครือข่าย', FRAMEWORK:'กรอบงาน', OVERPASS:'สะพานลอย/ทางยกระดับ', UNDERPASS:'ทางลอด', CROSSBOW:'หน้าไม้', AIRLINE:'สายการบิน', AIRSHIP:'เรือเหาะ', SPACESHIP:'ยานอวกาศ', SPACEMAN:'นักบินอวกาศ/มนุษย์อวกาศ', MOONBEAM:'ลำแสงจันทร์'
+        };
+        const I18N = {
+          en:{
+            step1:'STEP 1 — CHOOSE AN ACTIVITY', hangman:'Hangman', quiz:'Quiz', study:'Study', playerMode:'SELECT PLAYER MODE', single:'Single Player', multi:'Multiplayer', mpSetup:'MULTIPLAYER SETUP', host:'Host Online', join:'Join Online', continue:'Continue Here', onlineTeam:'YOUR ONLINE TEAM', blue:'BLUE TEAM', red:'RED TEAM',
+            step2:'STEP 2 — SELECT DIFFICULTY', hard:'Hard', hardDesc:'15 seconds per question. Quick reaction and rapid solving required.', normal:'Normal', normalDesc:'30 seconds per question. Balanced time limit for standard gameplay.', easy:'Easy', easyDesc:'45 seconds per question. Extra time provided for relaxed playing.', one:'One Brain Cell Mode', oneDesc:'For absolute single-celled organisms. Turtle-speed processing, zero pressure. Take your time!', step3:'STEP 3 — AVATARS & MATCH DURATION', back:'← BACK', next:'NEXT STEP →', start:'START GAME',
+            home:'Home', vocab:'Vocabulary', shuffle:'Shuffle', slide:'Slide View', all:'Show All', hint:'Hint', reveal:'Reveal Answer', skip:'Skip', nextQ:'Next Question', submit:'Submit 🚀', singleDesc:'Play independently and test your vocabulary skills at your own pace.', multiDesc:'Blue Team vs Red Team head-to-head competitive puzzle challenge.', duration:'2. MATCH DURATION (TOTAL MINUTES)', hostHelp:'Host = 🔵 Blue Team. Choose difficulty, create the room, wait for a player to join, then start the match.', joinHelp:'Join = 🔴 Red Team. Enter the 6-character room code, or open the invite link. Difficulty and game start are controlled by the Host.', localHelp:'Continue Here keeps the existing two-team / same-device multiplayer behavior.', invalidCode:'Enter a valid 6-character room code first.', vocabStart:'START VOCABULARY STUDY →', proceed:'PROCEED TO DIFFICULTY →', joinRoom:'JOIN ROOM →'
+          },
+          th:{
+            step1:'ขั้นที่ 1 — เลือกกิจกรรม', hangman:'เกมแขวนคอ', quiz:'เกมทายคำ', study:'โหมดเรียนรู้', playerMode:'เลือกรูปแบบการเล่น', single:'เล่นคนเดียว', multi:'เล่นหลายคน', mpSetup:'ตั้งค่าการเล่นหลายคน', host:'สร้างห้องออนไลน์', join:'เข้าร่วมห้องออนไลน์', continue:'เล่นต่อบนเครื่องนี้', onlineTeam:'ทีมออนไลน์ของคุณ', blue:'ทีมสีน้ำเงิน', red:'ทีมสีแดง',
+            step2:'ขั้นที่ 2 — เลือกระดับความยาก', hard:'ยาก', hardDesc:'ข้อละ 15 วินาที ต้องคิดไว ตอบไว!', normal:'ปานกลาง', normalDesc:'ข้อละ 30 วินาที กำลังพอดีสำหรับการเล่นทั่วไป', easy:'ง่าย', easyDesc:'ข้อละ 45 วินาที มีเวลาให้คิดแบบสบาย ๆ', one:'โหมดสมองหนึ่งเซลล์ 🫠', oneDesc:'สำหรับสิ่งมีชีวิตที่มีสมองอยู่ 1 เซลล์ถ้วน คิดช้าได้ ไม่ต้องรีบ เราไม่ได้ไปไหนทั้งนั้น! 🐢', step3:'ขั้นที่ 3 — เลือกตัวละครและเวลาการแข่งขัน', back:'← ย้อนกลับ', next:'ไปขั้นถัดไป →', start:'เริ่มเกม',
+            home:'หน้าหลัก', vocab:'คำศัพท์', shuffle:'สุ่มข้อ', slide:'มุมมองสไลด์', all:'แสดงทั้งหมด', hint:'คำใบ้', reveal:'ดูเฉลย', skip:'ข้าม', nextQ:'ข้อต่อไป', submit:'ส่งคำตอบ 🚀', singleDesc:'เล่นคนเดียวและฝึกทักษะคำศัพท์ตามจังหวะของคุณเอง', multiDesc:'ทีมสีน้ำเงินปะทะทีมสีแดง แข่งขันแก้ปริศนาคำศัพท์แบบตัวต่อตัว', duration:'2. ระยะเวลาการแข่งขัน (นาทีทั้งหมด)', hostHelp:'ผู้สร้างห้อง = 🔵 ทีมสีน้ำเงิน เลือกระดับความยาก สร้างห้อง รอเพื่อนเข้าร่วม แล้วเริ่มเกม', joinHelp:'ผู้เข้าร่วม = 🔴 ทีมสีแดง ใส่รหัสห้อง 6 ตัวหรือเปิดลิงก์เชิญ ระดับความยากและการเริ่มเกมควบคุมโดย Host', localHelp:'เล่นต่อบนเครื่องนี้ โดยคงรูปแบบสองทีมเล่นด้วยกันบนเครื่องเดียว', invalidCode:'กรุณากรอกรหัสห้อง 6 ตัวที่ถูกต้องก่อน', vocabStart:'เริ่มเรียนคำศัพท์ →', proceed:'ไปเลือกระดับความยาก →', joinRoom:'เข้าห้อง →'
+          }
+        };
+        const setText = (id,key) => { const e=document.getElementById(id); if(e) e.textContent=I18N[uiLanguage][key]; };
+        function getThaiMeaning(puzzle){ return puzzle && (TH_MEANINGS[String(puzzle.answer||'').toUpperCase()] || ''); }
+        function applyLanguage(){
+          const t=I18N[uiLanguage];
+          Object.entries({i18nSingleDesc:'singleDesc',i18nMultiDesc:'multiDesc',i18nDurationLabel:'duration',i18nStep1:'step1',i18nHangman:'hangman',i18nQuiz:'quiz',i18nStudy:'study',i18nPlayerMode:'playerMode',i18nSinglePlayer:'single',i18nMultiplayer:'multi',i18nMpSetup:'mpSetup',i18nHostOnline:'host',i18nJoinOnline:'join',i18nContinueHere:'continue',i18nOnlineTeam:'onlineTeam',i18nBlueTeam:'blue',i18nRedTeam:'red',i18nStep2:'step2',i18nStep3:'step3',i18nBack2:'back',i18nBack3:'back',i18nNextStep:'next',i18nStartGame:'start'}).forEach(([id,key])=>setText(id,key));
+          const hard=document.querySelector('#intro-time-15 .font-display'), hardD=document.querySelector('#intro-time-15 .text-slate-500'); if(hard)hard.textContent=t.hard; if(hardD)hardD.textContent=t.hardDesc;
+          const normal=document.querySelector('#intro-time-30 .font-display'), normalD=document.querySelector('#intro-time-30 .text-slate-500'); if(normal)normal.textContent=t.normal; if(normalD)normalD.textContent=t.normalDesc;
+          const easy=document.querySelector('#intro-time-45 .font-display'), easyD=document.querySelector('#intro-time-45 .text-slate-500'); if(easy)easy.textContent=t.easy; if(easyD)easyD.textContent=t.easyDesc;
+          const one=document.querySelector('#intro-time-60 .font-display'), oneD=document.querySelector('#intro-time-60 .text-purple-900'); if(one)one.textContent=t.one; if(oneD)oneD.textContent=t.oneDesc;
+          const langLabel = uiLanguage==='en'?'TH':'EN'; ['intro-lang-toggle','header-lang-toggle'].forEach(id=>{const e=document.getElementById(id);if(e)e.textContent=langLabel;});
+          const home=document.querySelector('#game-controls button[onclick="requestHomeNavigation()"] .header-compact-label'); if(home)home.textContent=t.home;
+          const mode=document.getElementById('mode-toggle-label'); if(mode)mode.textContent=state.mode==='team'?t.multi:t.single;
+          const vocabModeSlide=document.querySelector('#vocab-mode-slide span'); if(vocabModeSlide)vocabModeSlide.textContent=t.slide;
+          const vocabModeGrid=document.querySelector('#vocab-mode-grid span'); if(vocabModeGrid)vocabModeGrid.textContent=t.all;
+          const introNext=document.getElementById('intro-next-btn-1'); if(introNext){ introNext.textContent=(tempIntroActivity==='vocab'?t.vocabStart:(tempOnlineMode==='join'?t.joinRoom:t.proceed)); }
+          const help=document.getElementById('intro-online-help'); if(help && tempOnlineMode){ help.textContent=tempOnlineMode==='host'?t.hostHelp:(tempOnlineMode==='join'?t.joinHelp:t.localHelp); }
+          const meaning = document.querySelector('#slide-answer-container .thai-meaning');
+          if(window.renderVocabSlide) try{ renderVocabSlide(); }catch(e){}
+          localStorage.setItem(LANGUAGE_KEY, uiLanguage);
+        }
+        // Comprehensive UI localization: translate menus, controls, status labels and Streak UI.
+        // Puzzle answers/English vocabulary content are intentionally NOT translated.
+        const UI_TEXT_TH = {
+          'WORD PUZZLES':'รวมคำศัพท์', 'STEP 1 — CHOOSE AN ACTIVITY':'ขั้นที่ 1 — เลือกกิจกรรม',
+          'STEP 2 — SELECT DIFFICULTY':'ขั้นที่ 2 — เลือกระดับความยาก', 'STEP 3 — AVATARS & MATCH DURATION':'ขั้นที่ 3 — เลือกตัวละครและเวลาการแข่งขัน',
+          'STEP 1: Choose Activity and Player Mode':'ขั้นที่ 1: เลือกกิจกรรมและรูปแบบการเล่น', 'STEP 2: Choose Difficulty':'ขั้นที่ 2: เลือกระดับความยาก', 'STEP 3: Setup Avatars & Match Time':'ขั้นที่ 3: ตั้งค่าตัวละครและเวลา',
+          'SELECT PLAYER MODE':'เลือกรูปแบบการเล่น', 'Single Player':'เล่นคนเดียว', 'Multiplayer':'เล่นหลายคน',
+          'Play independently and test your vocabulary skills at your own pace.':'เล่นคนเดียวและฝึกคำศัพท์ตามจังหวะของคุณเอง',
+          'Blue Team vs Red Team head-to-head competitive puzzle challenge.':'ทีมสีน้ำเงินปะทะทีมสีแดง แข่งขันแก้ปริศนาคำศัพท์แบบตัวต่อตัว',
+          'MULTIPLAYER SETUP':'ตั้งค่าการเล่นหลายคน', 'Host Online':'สร้างห้องออนไลน์', 'Join Online':'เข้าร่วมห้องออนไลน์', 'Continue Here':'เล่นต่อบนเครื่องนี้',
+          'YOUR ONLINE TEAM':'ทีมออนไลน์ของคุณ', 'BLUE TEAM':'ทีมสีน้ำเงิน', 'RED TEAM':'ทีมสีแดง', 'BLUE TEAM A':'ทีมสีน้ำเงิน A', 'RED TEAM B':'ทีมสีแดง B',
+          'STEP 1 — CHOOSE AN ACTIVITY':'ขั้นที่ 1 — เลือกกิจกรรม', 'Hangman':'เกมแขวนคอ', 'Quiz':'เกมทายคำ', 'Study':'โหมดเรียนรู้', 'Vocabulary':'คำศัพท์',
+          'Vocabulary Study':'โหมดเรียนรู้คำศัพท์', 'Home':'หน้าหลัก', 'Shuffle':'สุ่มข้อ', 'Show All':'แสดงทั้งหมด', 'All Categories':'ทุกหมวดหมู่', 'SLIDE':'สไลด์', 'SLIDE VIEW':'มุมมองสไลด์', 'GRID VIEW':'มุมมองตาราง', 'Slide View':'มุมมองสไลด์',
+          'Hard':'ยาก', 'Normal':'ปานกลาง', 'Easy':'ง่าย', 'Hard':'ยาก',
+          '15 seconds per question. Quick reaction and rapid solving required.':'ข้อละ 15 วินาที ต้องคิดและตอบให้ไว',
+          '30 seconds per question. Balanced time limit for standard gameplay.':'ข้อละ 30 วินาที เวลาพอดีสำหรับการเล่นทั่วไป',
+          '45 seconds per question. Extra time provided for relaxed playing.':'ข้อละ 45 วินาที มีเวลาเพิ่มสำหรับการเล่นแบบสบาย ๆ',
+          'One Brain Cell Mode':'โหมดสมองหนึ่งเซลล์ 🫠', 'One brain cell mode':'โหมดสมองหนึ่งเซลล์ 🫠',
+          'For absolute single-celled organisms. Turtle-speed processing, zero pressure. Take your time!':'สำหรับสิ่งมีชีวิตที่มีสมองอยู่ 1 เซลล์ถ้วน คิดช้าได้ ไม่ต้องรีบ เราไม่ได้ไปไหนทั้งนั้น! 🐢',
+          'START GAME':'เริ่มเกม', 'PROCEED TO DIFFICULTY →':'ไปเลือกระดับความยาก →', 'JOIN ROOM →':'เข้าห้อง →', 'START VOCABULARY STUDY →':'เริ่มเรียนคำศัพท์ →',
+          'NEXT STEP →':'ไปขั้นถัดไป →','← BACK':'← ย้อนกลับ','START VOCABULARY STUDY':'เริ่มเรียนคำศัพท์','Set time':'ตั้งเวลา',
+          '2. MATCH DURATION (TOTAL MINUTES)':'2. ระยะเวลาการแข่งขัน (นาทีทั้งหมด)', '5 Min':'5 นาที', '10 Min':'10 นาที', '15 Min':'15 นาที',
+          'Question Turn Timer Options with Confirmation Prompt':'ตัวเลือกเวลาต่อข้อ พร้อมการยืนยัน', '1m':'1 นาที', '15s':'15 วิ', '30s':'30 วิ', '60s':'60 วิ', '45s':'45 วิ',
+          'Header & Action Toolbar':'แถบเครื่องมือและการควบคุม', 'MAIN CONTENT':'เนื้อหาหลัก', 'TAB 0: HANGMAN':'แท็บ 0: เกมแขวนคอ', 'TAB 1: QUIZ MODE':'แท็บ 1: เกมทายคำ', 'TAB 2: VOCABULARY':'แท็บ 2: คำศัพท์',
+          'NEXT PUZZLE':'ข้อถัดไป', 'NEXT QUESTION':'ข้อต่อไป', 'Next Question':'ข้อต่อไป', 'Next ➡️':'ข้อต่อไป ➡️', 'Next Puzzle':'ข้อถัดไป',
+          'Hint':'คำใบ้', 'Reveal Answer':'ดูเฉลย', '👁️ Reveal Answer':'👁️ ดูเฉลย', 'Skip':'ข้าม', '⏭️ Skip':'⏭️ ข้าม', 'Submit 🚀':'ส่งคำตอบ 🚀',
+          'REMAINING:':'เหลือ:', '⭐ SCORE:':'⭐ คะแนน:', 'PTS':'คะแนน', 'PLAYER':'ผู้เล่น', 'Healthy & Ready!':'พร้อมลุย!', 'Category':'หมวดหมู่', 'Compound Challenge':'คำผสมท้าทาย',
+          'WHAT IS THIS COMPOUND WORD?':'คำนี้คือคำศัพท์อะไร?', 'TYPE ANSWER (PC KEYBOARD ENABLED)...':'พิมพ์คำตอบ...', 'Click Card to Reveal Answer':'แตะการ์ดเพื่อดูเฉลย', '💡 Click Card to Reveal Answer':'💡 แตะการ์ดเพื่อดูเฉลย',
+          'CANCEL':'ยกเลิก', 'REVEAL NOW':'ดูเฉลยตอนนี้', 'REVEAL ANSWER?':'ดูเฉลยหรือไม่?',
+          "Are you sure you want to reveal the answer? You won't be able to earn points for this question once revealed.":'ยืนยันการดูเฉลยหรือไม่? เมื่อเปิดเฉลยแล้ว ข้อนี้จะไม่สามารถรับคะแนนได้',
+          'SCORE RESET WARNING':'ยืนยันการรีเซ็ตคะแนน', 'CONFIRM & RESTART':'ยืนยันและเริ่มใหม่',
+          'Changing the game mode, time limit, or player type will reset all scores! Are you sure you want to proceed?':'การเปลี่ยนโหมด เวลา หรือรูปแบบผู้เล่นจะรีเซ็ตคะแนนทั้งหมด ต้องการดำเนินการต่อหรือไม่?',
+          '5-STREAK OPTION MODAL (MULTIPLAYER ONLY)':'ตัวเลือกโบนัส 5 สตรีค (เล่นหลายคนเท่านั้น)', '5-STREAK BONUS EARNED!':'ได้โบนัส 5 สตรีค!',
+          'Your team answered 5 questions correctly in a row! Choose your advantage:':'ทีมของคุณตอบถูกติดต่อกัน 5 ข้อ! เลือกโบนัสของคุณได้เลย',
+          'STEAL 1 POINT FROM OPPONENT':'ขโมย 1 คะแนนจากคู่แข่ง', 'Transfer 1 point directly from their score to yours.':'โอน 1 คะแนนจากคู่แข่งมาให้ทีมของคุณ',
+          'DEBUFF OPPONENT TURN TIMER':'ลดเวลาตาของคู่แข่ง', 'Reduce opponent\'s time limit to next lower speed!':'ลดเวลาตาของคู่แข่งลงหนึ่งระดับ',
+          'NEXT QUESTION CHALLENGE':'โบนัสท้าทายข้อถัดไป', 'Keep this turn: solve the next puzzle for +1 bonus point. Fail, skip, reveal, or run out of time and the opponent gets +1.':'รักษาตานี้ไว้: ถ้าตอบข้อถัดไปถูก รับโบนัส +1 คะแนน แต่ถ้าผิด ข้าม เปิดเฉลย หรือหมดเวลา คู่แข่งจะได้ +1 คะแนน',
+          '👉 ACTIVE TURN':'👉 ตาของทีมนี้', '⚡ +1 PT PER CORRECT':'⚡ ตอบถูก +1 คะแนน', '🔥5 STREAK BONUS':'🔥 โบนัส 5 สตรีค',
+          'BLUE TEAM: 5-STREAK BONUS!':'ทีมสีน้ำเงิน: โบนัส 5 สตรีค!', 'RED TEAM: 5-STREAK BONUS!':'ทีมสีแดง: โบนัส 5 สตรีค!',
+          'BLUE TEAM: 5-STREAK BONUS — WAITING FOR BLUE':'ทีมสีน้ำเงิน: โบนัส 5 สตรีค — รอทีมสีน้ำเงินเลือก', 'RED TEAM: 5-STREAK BONUS — WAITING FOR RED':'ทีมสีแดง: โบนัส 5 สตรีค — รอทีมสีแดงเลือก',
+          'QUESTION COMPLETE — ':'จบข้อนี้ — ', 'TIME\'S UP!':'หมดเวลา!', 'OUT OF HEARTS!':'หัวใจหมด!', 'PERFECT!':'ยอดเยี่ยม!', 'CORRECT!':'ถูกต้อง!', 'WRONG!':'ยังไม่ถูก', 'Answer Revealed:':'เฉลย:',
+          'MATCH COMPLETE!':'จบการแข่งขัน!', 'PLAY AGAIN':'เล่นอีกครั้ง', '🎮 PLAY AGAIN':'🎮 เล่นอีกครั้ง', 'Home':'หน้าหลัก',
+          '🔀':'🔀', '🔊':'🔊', 'RECONNECTING':'กำลังเชื่อมต่อใหม่', 'MESH ONLINE':'เชื่อมต่อเมชแล้ว', 'MESH CONNECTED':'เมชเชื่อมต่อแล้ว', 'CONNECTED':'เชื่อมต่อแล้ว', 'DISCONNECTED':'ตัดการเชื่อมต่อ',
+          'ROOM CODE':'รหัสห้อง', 'COPY INVITE LINK':'คัดลอกลิงก์ชวนเพื่อน', 'Waiting for a player to join the mesh…':'กำลังรอผู้เล่นเข้าห้อง…', 'WAITING FOR PLAYER…':'กำลังรอผู้เล่น…',
+          'START GAME FOR EVERYONE':'เริ่มเกมสำหรับทุกคน', 'WAITING FOR OPPONENT…':'รอคู่แข่ง…', 'YOUR TURN':'ตาของคุณ', 'OPPONENT\'S TURN':'ตาของคู่แข่ง',
+          'Connected to room mesh — waiting for Host to start':'เชื่อมต่อห้องแล้ว — รอ Host เริ่มเกม', 'Game synchronized — mesh active':'ซิงก์เกมแล้ว — เมชทำงาน',
+          'Continue Here keeps the existing two-team / same-device multiplayer behavior.':'เล่นต่อบนเครื่องนี้เพื่อเล่นสองทีมบนอุปกรณ์เดียว',
+          'Host = 🔵 Blue Team. Choose difficulty, create the room, wait for a player to join, then start the match.':'Host = 🔵 ทีมสีน้ำเงิน เลือกระดับความยาก สร้างห้อง รอเพื่อนเข้าร่วม แล้วเริ่มเกม',
+          'Join = 🔴 Red Team. Enter the 6-character room code, or open the invite link. Difficulty and game start are controlled by the Host.':'Join = 🔴 ทีมสีแดง ใส่รหัสห้อง 6 ตัวหรือเปิดลิงก์เชิญ ระดับความยากและการเริ่มเกมควบคุมโดย Host',
+          'Click Card to Reveal Answer':'แตะการ์ดเพื่อดูเฉลย', 'Random':'สุ่ม', '🎲 Random':'🎲 สุ่ม', 'Prev':'ก่อนหน้า', '⬅️ Prev':'⬅️ ก่อนหน้า',
+          'SHOW ANSWER':'แสดงคำตอบ','HIDE ANSWER':'ซ่อนคำตอบ','CLICK ANYWHERE TO REVEAL':'แตะที่ใดก็ได้เพื่อดูเฉลย','Vocabulary Study':'โหมดเรียนรู้คำศัพท์'
+        };
+        const UI_TEXT_EN = Object.fromEntries(Object.entries(UI_TEXT_TH).map(([en,th])=>[th,en]));
+        function localizeUiText(root=document.body){
+          const dict = uiLanguage==='th' ? UI_TEXT_TH : UI_TEXT_EN;
+          const walker=document.createTreeWalker(root,NodeFilter.SHOW_TEXT);
+          const nodes=[]; let n; while(n=walker.nextNode()) nodes.push(n);
+          for(const node of nodes){
+            if(node.parentElement && ['SCRIPT','STYLE'].includes(node.parentElement.tagName)) continue;
+            const raw=node.nodeValue; const trim=raw.trim(); if(!trim) continue;
+            if(Object.prototype.hasOwnProperty.call(dict,trim)){ node.nodeValue=raw.replace(trim,dict[trim]); }
+          }
+          root.querySelectorAll('input[placeholder],button[title],[aria-label]').forEach(el=>{
+            const attrs=['placeholder','title','aria-label']; for(const a of attrs){ if(!el.hasAttribute(a)) continue; const v=el.getAttribute(a); if(dict[v]) el.setAttribute(a,dict[v]); }
+          });
+          const code=document.documentElement; code.lang=uiLanguage==='th'?'th':'en';
+        }
+        const _applyLanguageOriginal = applyLanguage;
+        applyLanguage = function(){
+          _applyLanguageOriginal();
+          localizeUiText(document.body);
+          // Dynamic Streak buttons/modal copy.
+          const st=document.getElementById('streak-reward-title');
+          if(st && uiLanguage==='th' && st.textContent.includes('5-STREAK BONUS') && !st.textContent.includes('โบนัส')){
+            const isRed=st.textContent.includes('RED');
+            st.textContent=isRed?'ทีมสีแดง: โบนัส 5 สตรีค!':'ทีมสีน้ำเงิน: โบนัส 5 สตรีค!';
+          }
+        };
+        // Re-localize newly-created UI fragments after dynamic renders without translating puzzle answers.
+        const i18nObserver = new MutationObserver(muts=>{
+          if(uiLanguage!=='th') return;
+          for(const m of muts) for(const node of m.addedNodes){ if(node.nodeType===1) localizeUiText(node); }
+        });
+        i18nObserver.observe(document.body,{childList:true,subtree:true});
+
+        function toggleLanguage(){ uiLanguage = uiLanguage==='en'?'th':'en'; applyLanguage(); playSFX('click'); }
+        try{ uiLanguage = localStorage.getItem(LANGUAGE_KEY)==='th'?'th':'en'; }catch(e){uiLanguage='en';}
+        applyLanguage();
+        
         // ================================================================
         // ONLINE ROOM EXTENSION - P2P mesh prototype
         // ================================================================
