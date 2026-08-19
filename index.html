@@ -2782,7 +2782,7 @@
                 N.reconnectAttempts=Math.min(N.reconnectAttempts+1,8);
                 const cycle=N.recoveryCycle;
                 const delay=Math.min(RECONNECT_MAX,RECONNECT_BASE*Math.pow(1.7,Math.max(0,N.reconnectAttempts-1)))+Math.floor(Math.random()*350);
-                setHealth('warn','RECONNECTING…',true);setInteractionLocked(true);
+                setHealth('warn','RECONNECTING…',true);setInteractionLocked(state.activeTurn!==N.team || !N.started, {preserveInput:true});
                 status(`Rejoining mesh in ${Math.ceil(delay/1000)}s…`,false);
                 N.recoveryTimer=setTimeout(()=>{
                     if(N.destroying||N.role!=='client'||cycle!==N.recoveryCycle)return;
@@ -2827,7 +2827,10 @@
                 // active team must NEVER be allowed to type/submit locally, even if a recovery
                 // callback temporarily clears the generic lock.
                 const onlineTurnLock=onlinePlaying&&!isMyTurn;
-                const hardLock=onlineTurnLock || (!!lock&&!preserveInput);
+                // During an online match, network status must NEVER disable the active
+                // player's input. If transport is unavailable, sendAct() queues actions.
+                // Only turn ownership is allowed to hard-lock gameplay controls.
+                const hardLock=onlinePlaying ? onlineTurnLock : (!!lock&&!preserveInput);
                 document.body.classList.toggle('online-waiting-turn',hardLock);
                 const quizInput=document.getElementById('quiz-input');
                 const shouldDisableInput=hardLock;
@@ -2848,7 +2851,7 @@
             function sendAct(a,fromQueue=false){
                 if(!(N.started&&N.phase==='playing'&&N.team===state.activeTurn))return false;
                 const hc=N.role==='host'?null:hostConnection();
-                if(N.role==='client'&&(!N.ready||!hc)){
+                if(N.role==='client'&&(!hc)){
                     if(!fromQueue)queueAction(a);
                     return false;
                 }
@@ -2883,15 +2886,14 @@
             const PEER_SERVER={}; // Use PeerJS Cloud defaults exactly; explicit cloud host/SSL overrides can cause incompatibilities.
             // Public Open Relay TURN fallback. Direct/STUN is tried first; TURN is only used when needed.
             // Metered publishes these endpoints for browser WebRTC clients.
+            // Prefer PeerJS' own TURN infrastructure for cross-network WebRTC.
+            // This mirrors the official PeerJS defaults rather than relying on a public
+            // third-party relay credential that may become unavailable or rate-limited.
             const ICE_CONFIG={iceServers:[
                 {urls:'stun:stun.l.google.com:19302'},
-                {urls:'stun:openrelay.metered.ca:80'},
-                {urls:'turn:openrelay.metered.ca:80',username:'openrelayproject',credential:'openrelayproject'},
-                {urls:'turn:openrelay.metered.ca:443',username:'openrelayproject',credential:'openrelayproject'},
-                {urls:'turn:openrelay.metered.ca:443?transport=tcp',username:'openrelayproject',credential:'openrelayproject'},
-                {urls:'turns:openrelay.metered.ca:443?transport=tcp',username:'openrelayproject',credential:'openrelayproject'}
+                {urls:['turn:eu-0.turn.peerjs.com:3478','turn:us-0.turn.peerjs.com:3478'],username:'peerjs',credential:'peerjsp'}
             ],iceTransportPolicy:'all',iceCandidatePoolSize:4,sdpSemantics:'unified-plan'};
-            function peerOptions(debug=3){return {config:ICE_CONFIG,debug};}
+            function peerOptions(debug=2){return {config:ICE_CONFIG,debug,pingInterval:5000};}
             function peerErrorText(err){return String(err?.type||err?.message||'unknown').replace(/-/g,' ');}
             function createHostPeer(){
                 const gen=N.generation;N.hostPeerId=peerIdForCode(N.code);N.connecting=true;
@@ -2936,7 +2938,15 @@
                     }
                 });
                 N.peer.on('error',err=>{if(gen!==N.generation||N.destroying)return;console.warn('[Emoji Rebus Mesh] Client peer error',err);const t=peerErrorText(err);
-                    markClientRecovering(`Online error: ${t}`);scheduleMeshReconnect('peer error');
+                    // Signaling errors do not automatically mean the WebRTC game channel is dead.
+                    // Keep gameplay online when the host data channel is still open.
+                    if(hostConnection()){
+                        setHealth('warn','SIGNALING RECOVERING…',true);
+                        status(`Signaling issue (${t}) — keeping game connection alive.`,true);
+                        try{N.peer.reconnect();}catch{}
+                    }else{
+                        markClientRecovering(`Online error: ${t}`);scheduleMeshReconnect('peer error');
+                    }
                 });
                 startClientWatchdog();
             }
@@ -2949,7 +2959,7 @@
             function inviteLink(){try{const url=new URL(location.href);url.searchParams.set('room',N.code);return url.toString();}catch{return `${location.origin}${location.pathname}?room=${encodeURIComponent(N.code)}`;}}
             async function copyInviteLink(){const link=inviteLink();try{await navigator.clipboard.writeText(link);status('Invite link copied — send it to your friend.',true);}catch{const ta=document.createElement('textarea');ta.value=link;document.body.appendChild(ta);ta.select();try{document.execCommand('copy');status('Invite link copied — send it to your friend.',true);}catch{status(link,true);}ta.remove();}}
             function showHostLobby(){
-                showLobby('Host Lobby',`<div class="bg-slate-100 border-2 border-slate-900 rounded-xl p-3"><div class="text-[10px] font-black uppercase">ROOM CODE</div><div class="text-4xl sm:text-5xl font-black tracking-[.28em] mt-1">${escRoom(N.code)}</div><button id="or-copy-link" class="solid-btn bg-yellow-400 text-slate-900 w-full py-2 mt-3 font-black">📋 COPY INVITE LINK</button><div class="text-[10px] font-bold text-slate-500 mt-2">P2P mesh room — send the link or this code to your friend.</div><div class="text-xs font-black mt-3">🎯 ${escRoom(state.difficulty)} · ⏱️ ${state.baseTimerDuration}s / question</div><div id="or-players" class="mt-2">🔵 Blue: 1 &nbsp; 🔴 Red: 0</div><div id="or-wait-note" class="text-[10px] font-bold text-amber-700 mt-2">Waiting for a player to join the mesh…</div><div class="text-[10px] font-bold text-slate-500 mt-1">Game events travel peer-to-peer. Direct/STUN is preferred; TURN relay is enabled as a fallback.</div><button id="or-start" disabled class="solid-btn bg-slate-300 text-slate-500 w-full py-2 mt-3 font-black cursor-not-allowed">WAITING FOR PLAYER…</button></div>`);
+                showLobby('Host Lobby',`<div class="bg-slate-100 border-2 border-slate-900 rounded-xl p-3"><div class="text-[10px] font-black uppercase">ROOM CODE</div><div class="text-4xl sm:text-5xl font-black tracking-[.28em] mt-1">${escRoom(N.code)}</div><button id="or-copy-link" class="solid-btn bg-yellow-400 text-slate-900 w-full py-2 mt-3 font-black">📋 COPY INVITE LINK</button><div class="text-[10px] font-bold text-slate-500 mt-2">P2P mesh room — send the link or this code to your friend.</div><div class="text-xs font-black mt-3">🎯 ${escRoom(state.difficulty)} · ⏱️ ${state.baseTimerDuration}s / question</div><div id="or-players" class="mt-2">🔵 Blue: 1 &nbsp; 🔴 Red: 0</div><div id="or-wait-note" class="text-[10px] font-bold text-amber-700 mt-2">Waiting for a player to join the mesh…</div><div class="text-[10px] font-bold text-slate-500 mt-1">Game events travel peer-to-peer. Direct/STUN is preferred; PeerJS TURN relay is the cross-network fallback.</div><button id="or-start" disabled class="solid-btn bg-slate-300 text-slate-500 w-full py-2 mt-3 font-black cursor-not-allowed">WAITING FOR PLAYER…</button></div>`);
                 document.getElementById('or-copy-link').onclick=copyInviteLink;document.getElementById('or-start').onclick=hostStart;renderPlayers();
             }
             function hostStart(){
