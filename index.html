@@ -2070,37 +2070,106 @@
         }
 
         function triggerStreakRewardModal() {
-            playSFX('victory');
-            document.getElementById('streak-reward-modal').classList.remove('hidden');
-            const title = document.getElementById('streak-reward-title');
-            if (state.activeTurn === 'a') {
-                title.textContent = "BLUE TEAM: 5-STREAK BONUS!";
-                title.className = "text-xl sm:text-2xl font-black font-display text-blue-700 uppercase";
-            } else {
-                title.textContent = "RED TEAM: 5-STREAK BONUS!";
-                title.className = "text-xl sm:text-2xl font-black font-display text-red-700 uppercase";
+            const team = state.activeTurn;
+            const streak = team === 'a' ? state.teamA.streak : state.teamB.streak;
+            const key = `${team}:${streak}:${state.currentPuzzleIndex}`;
+            // Never reopen the same reward chooser from repeated renders/snapshots.
+            if (N && N.streakRewardKey === key && !document.getElementById('streak-reward-modal').classList.contains('hidden')) return;
+            if (N && N.streakRewardKey === key && N.streakRewardBusy) return;
+            if (N) {
+                N.streakRewardKey = key;
+                N.streakRewardBusy = false;
             }
+            playSFX('victory');
+            if (N && N.role === 'host' && N.phase === 'playing') {
+                N.streakRewardPending = true;
+                clearTimeout(N.onlineAdvanceTimer);
+                N.onlineAdvanceTimer = null;
+            }
+            const modal = document.getElementById('streak-reward-modal');
+            modal?.classList.remove('hidden');
+            const title = document.getElementById('streak-reward-title');
+            if (title) {
+                if (team === 'a') {
+                    title.textContent = 'BLUE TEAM: 5-STREAK BONUS!';
+                    title.className = 'text-xl sm:text-2xl font-black font-display text-blue-700 uppercase';
+                } else {
+                    title.textContent = 'RED TEAM: 5-STREAK BONUS!';
+                    title.className = 'text-xl sm:text-2xl font-black font-display text-red-700 uppercase';
+                }
+            }
+            updateStreakRewardButtons?.(false);
+        }
+
+        function updateStreakRewardButtons(busy) {
+            const modal = document.getElementById('streak-reward-modal');
+            if (!modal) return;
+            modal.querySelectorAll('button').forEach(btn => {
+                btn.disabled = !!busy;
+                btn.classList.toggle('opacity-50', !!busy);
+                btn.classList.toggle('cursor-not-allowed', !!busy);
+            });
+            if (N) N.streakRewardBusy = !!busy;
+        }
+
+        function closeStreakRewardModal() {
+            const modal = document.getElementById('streak-reward-modal');
+            modal?.classList.add('hidden');
+            updateStreakRewardButtons(false);
+            if (N) N.streakRewardPending = false;
         }
 
         function applyStreakReward(type) {
-            document.getElementById('streak-reward-modal').classList.add('hidden');
-            playSFX('click');
-            
-            const activeTeam = state.activeTurn === 'a' ? state.teamA : state.teamB;
-            const oppTeam = state.activeTurn === 'a' ? state.teamB : state.teamA;
+            const R = window.N || null;
+            const sendReward = window.onlineSendAct;
+            const RuntimeO = window.O || null;
+            updateStreakRewardButtons(true);
 
-            if (type === 'steal') {
-                if (oppTeam.score > 0) {
-                    oppTeam.score -= 1;
-                    activeTeam.score += 1;
+            if (R && R.phase === 'playing' && !R.remote && (R.role === 'client' || R.role === 'host')) {
+                if (R.role === 'client') {
+                    const sent = typeof sendReward === 'function' ? sendReward({t:'reward',v:type}) : false;
+                    closeStreakRewardModal();
+                    if (!sent) {
+                        document.getElementById('streak-reward-modal')?.classList.remove('hidden');
+                        updateStreakRewardButtons(false);
+                    }
+                    return;
                 }
-            } else if (type === 'debuffTime') {
-                if (oppTeam.timeLimit === 60) oppTeam.timeLimit = 45;
-                else if (oppTeam.timeLimit === 45) oppTeam.timeLimit = 30;
-                else if (oppTeam.timeLimit === 30) oppTeam.timeLimit = 15;
-            } else if (type === 'nextQuestionBonus') {
-                state.streakRisk = { team: state.activeTurn };
+                R.streakRewardBusy = true;
+                R.remote = true;
+                try {
+                    const activeTeam = state.activeTurn === 'a' ? state.teamA : state.teamB;
+                    const oppTeam = state.activeTurn === 'a' ? state.teamB : state.teamA;
+                    if (type === 'steal') { if (oppTeam.score > 0) { oppTeam.score--; activeTeam.score++; } }
+                    else if (type === 'debuffTime') {
+                        if (oppTeam.timeLimit === 60) oppTeam.timeLimit = 45;
+                        else if (oppTeam.timeLimit === 45) oppTeam.timeLimit = 30;
+                        else if (oppTeam.timeLimit === 30) oppTeam.timeLimit = 15;
+                    }
+                    else if (type === 'nextQuestionBonus') state.streakRisk={team:state.activeTurn};
+                } finally { R.remote=false; }
+                closeStreakRewardModal();
+                R.streakRewardPending=false;
+                R.streakRewardKey=`${state.activeTurn}:${state.teamA.streak}:${state.currentPuzzleIndex}`;
+                playSFX('click'); updateScoresUI();
+                if(typeof window.sendState==='function') window.sendState();
+                clearTimeout(R.onlineAdvanceTimer);
+                R.onlineAdvanceTimer=setTimeout(()=>{
+                    if(R.destroying||R.role!=='host'||R.phase!=='playing'||!state.questionAnswered)return;
+                    const tab=state.activeTab; R.remote=true;
+                    try { if(RuntimeO){if(tab==='hangman')RuntimeO.nextHangman();else if(tab==='play')RuntimeO.nextQuiz();} }
+                    finally { R.remote=false; }
+                    R.onlineFeedback=null; R.streakRewardKey=''; R.streakRewardPending=false; R.streakRewardBusy=false; R.onlineAdvanceTimer=null;
+                    if(typeof window.sendState==='function') window.sendState();
+                },3000);
+                return;
             }
+            closeStreakRewardModal(); playSFX('click');
+            const activeTeam=state.activeTurn==='a'?state.teamA:state.teamB;
+            const oppTeam=state.activeTurn==='a'?state.teamB:state.teamA;
+            if(type==='steal'){if(oppTeam.score>0){oppTeam.score--;activeTeam.score++;}}
+            else if(type==='debuffTime'){if(oppTeam.timeLimit===60)oppTeam.timeLimit=45;else if(oppTeam.timeLimit===45)oppTeam.timeLimit=30;else if(oppTeam.timeLimit===30)oppTeam.timeLimit=15;}
+            else if(type==='nextQuestionBonus')state.streakRisk={team:state.activeTurn};
             updateScoresUI();
         }
 
@@ -2368,8 +2437,9 @@
                 joinTimer:null,recoveryTimer:null,actionSeq:0,lastSeenEvents:new Set(),mesh:new Map(),
                 pendingPeers:new Set(),hostPeerId:'',connecting:false,reconnecting:false,destroying:false,
                 reconnectAttempts:0,meshEventCounter:0,lastSeenStates:new Set(),
-                networkRecovering:false,recoveryCycle:0,hostConnToken:0,pendingActions:[],actionFlushTimer:null,onlineFeedback:null,onlineFeedbackVersion:0,onlineAdvanceTimer:null,lastInputLockReason:'',iceGraceTimer:null,lastHostPathChangeAt:0
+                networkRecovering:false,recoveryCycle:0,hostConnToken:0,pendingActions:[],actionFlushTimer:null,onlineFeedback:null,onlineFeedbackVersion:0,onlineAdvanceTimer:null,streakRewardPending:false,lastInputLockReason:'',iceGraceTimer:null,lastHostPathChangeAt:0
             };
+            window.N = N;
             const ACTIONS=['hangmanGuess','nextHangman','hintHangman','skipQuiz','quizSubmit','nextQuiz','hintQuiz','revealQuiz','skipHangman','setTurn','reward','timeout'];
             const SYNC_INTERVAL=750, JOIN_HEARTBEAT=3000, MAX_JOIN_WAIT=30000, WATCHDOG_STALE=6000;
             const RECONNECT_BASE=1800, RECONNECT_MAX=14000, MAX_MESH_PEERS=6, RECOVERY_GRACE=4500, ICE_DISCONNECT_GRACE=6500, ACTION_QUEUE_MAX=12, HEARTBEAT_MS=3500;
@@ -2530,13 +2600,13 @@
                 N.generation++;stopTimers();N.destroying=true;
                 N.mesh.forEach(c=>{try{c.close();}catch{}});N.mesh.clear();N.pendingPeers.clear();N.players.clear();
                 try{N.peer?.destroy();}catch{}N.peer=null;N.destroying=false;
-                N.ready=false;N.started=false;N.phase='idle';N.role=null;N.code='';N.seq=0;N.lastAppliedSeq=0;N.remote=false;N.connecting=false;N.reconnecting=false;N.hostPeerId='';N.lastSnapshotAt=0;N.reconnectAttempts=0;N.actionSeq=0;N.lastSeenEvents.clear();N.lastSeenStates.clear();N.meshEventCounter=0;N.networkRecovering=false;N.recoveryCycle++;N.hostConnToken=0;N.pendingActions=[];clearTimeout(N.actionFlushTimer);N.actionFlushTimer=null;clearTimeout(N.onlineAdvanceTimer);N.onlineAdvanceTimer=null;N.onlineFeedback=null;N.onlineFeedbackVersion=0;document.getElementById('online-health-float')?.classList.remove('show');
+                N.ready=false;N.started=false;N.phase='idle';N.role=null;N.code='';N.seq=0;N.lastAppliedSeq=0;N.remote=false;N.connecting=false;N.reconnecting=false;N.hostPeerId='';N.lastSnapshotAt=0;N.reconnectAttempts=0;N.actionSeq=0;N.lastSeenEvents.clear();N.lastSeenStates.clear();N.meshEventCounter=0;N.networkRecovering=false;N.recoveryCycle++;N.hostConnToken=0;N.pendingActions=[];clearTimeout(N.actionFlushTimer);N.actionFlushTimer=null;clearTimeout(N.onlineAdvanceTimer);N.onlineAdvanceTimer=null;N.onlineFeedback=null;N.onlineFeedbackVersion=0;N.streakRewardPending=false;N.streakRewardKey='';N.streakRewardBusy=false;document.getElementById('online-health-float')?.classList.remove('show');
             }
             function pack(){
                 return {v:3,activeTab:state.activeTab,mode:state.mode,currentPuzzleIndex:state.currentPuzzleIndex,questionAnswered:state.questionAnswered,quizResetVersion:N.quizResetVersion,
                     availableIndices:[...state.availableIndices],soloScore:state.soloScore,soloStreak:state.soloStreak,teamA:{...state.teamA},teamB:{...state.teamB},activeTurn:state.activeTurn,
                     hangmanHearts:state.hangmanHearts,hangmanGuessedLetters:[...state.hangmanGuessedLetters],hangmanHintUsed:state.hangmanHintUsed,quizHintUsed:state.quizHintUsed,
-                    questionTimeLeft:state.questionTimeLeft,globalTimeLeft:state.globalTimeLeft,streakRisk:state.streakRisk,baseTimerDuration:state.baseTimerDuration,matchDurationMinutes:state.matchDurationMinutes,phase:N.phase,onlineFeedback:N.onlineFeedback};
+                    questionTimeLeft:state.questionTimeLeft,globalTimeLeft:state.globalTimeLeft,streakRisk:state.streakRisk,streakRewardKey:N.streakRewardKey||'',baseTimerDuration:state.baseTimerDuration,matchDurationMinutes:state.matchDurationMinutes,phase:N.phase,onlineFeedback:N.onlineFeedback};
             }
             function confirmOnlineManualNext(label){
                 if(!(N.role==='host'||N.role==='client')||N.phase!=='playing'||!state.questionAnswered)return true;
@@ -2605,6 +2675,8 @@
                 const old=state.currentPuzzleIndex,oldTab=state.activeTab,puzzleChanged=old!==s.currentPuzzleIndex,tabChanged=oldTab!==s.activeTab,remoteQuizReset=typeof s.quizResetVersion==='number'&&s.quizResetVersion!==N.lastQuizResetVersion;
                 if(typeof s.quizResetVersion==='number')N.lastQuizResetVersion=s.quizResetVersion;
                 Object.assign(state,{activeTab:s.activeTab,mode:s.mode,currentPuzzleIndex:s.currentPuzzleIndex,questionAnswered:!!s.questionAnswered,availableIndices:s.availableIndices||[],soloScore:s.soloScore,soloStreak:s.soloStreak,teamA:{...state.teamA,...s.teamA},teamB:{...state.teamB,...s.teamB},activeTurn:s.activeTurn,hangmanHearts:s.hangmanHearts,hangmanGuessedLetters:new Set(s.hangmanGuessedLetters||[]),hangmanHintUsed:s.hangmanHintUsed,quizHintUsed:s.quizHintUsed,questionTimeLeft:s.questionTimeLeft,globalTimeLeft:s.globalTimeLeft,streakRisk:s.streakRisk||null,baseTimerDuration:s.baseTimerDuration,matchDurationMinutes:s.matchDurationMinutes});
+                if (typeof s.streakRewardKey === 'string' && s.streakRewardKey) { N.streakRewardKey=s.streakRewardKey; }
+                if (!s.streakRewardPending && N.streakRewardBusy) closeStreakRewardModal();
                 const incomingFeedback=s.onlineFeedback;
                 const feedbackChanged=!!incomingFeedback&&incomingFeedback.version!==N.onlineFeedbackVersion;
                 if(incomingFeedback&&incomingFeedback.version>N.onlineFeedbackVersion){N.onlineFeedbackVersion=incomingFeedback.version;N.onlineFeedback=incomingFeedback;}
@@ -2746,6 +2818,7 @@
             function sendState(){
                 if(N.role!=='host'||N.mesh.size===0)return;N.seq++;const payload={type:'state',state:pack(),started:N.started,phase:N.phase,seq:N.seq,serverTs:Date.now()};broadcastMesh(payload);N.lastSnapshotAt=Date.now();
             }
+            window.sendState = sendState;
             function startHostTimers(){
                 clearInterval(N.clock);
                 N.clock=setInterval(()=>{
@@ -2814,6 +2887,21 @@
             function manualReconnect(){if(N.role!=='client')return;N.reconnectAttempts=0;rebuildClientPeer('manual retry');}
             function renderPlayers(){const e=document.getElementById('or-players');if(!e)return;let b=0;N.players.forEach(p=>{if(p.team==='b')b++;});e.innerHTML=`🔵 Blue: 1 &nbsp; 🔴 Red: ${b}`;const start=document.getElementById('or-start'),note=document.getElementById('or-wait-note');if(start&&N.role==='host'){const ready=b>0;start.disabled=!ready;start.textContent=ready?'START GAME FOR EVERYONE':'WAITING FOR PLAYER…';start.className=ready?'solid-btn bg-emerald-400 text-slate-900 w-full py-2 mt-3 font-black':'solid-btn bg-slate-300 text-slate-500 w-full py-2 mt-3 font-black cursor-not-allowed';if(note)note.textContent=ready?'Player joined the mesh — Host can start the match.':'Waiting for a player to join the mesh…';}}
             function valid(a){return !!(a&&ACTIONS.includes(a.t));}
+            function applyStreakRewardRemote(type) {
+                const activeTeam = state.activeTurn === 'a' ? state.teamA : state.teamB;
+                const oppTeam = state.activeTurn === 'a' ? state.teamB : state.teamA;
+                if (type === 'steal') {
+                    if (oppTeam.score > 0) { oppTeam.score -= 1; activeTeam.score += 1; }
+                } else if (type === 'debuffTime') {
+                    if (oppTeam.timeLimit === 60) oppTeam.timeLimit = 45;
+                    else if (oppTeam.timeLimit === 45) oppTeam.timeLimit = 30;
+                    else if (oppTeam.timeLimit === 30) oppTeam.timeLimit = 15;
+                } else if (type === 'nextQuestionBonus') {
+                    state.streakRisk = { team: state.activeTurn };
+                }
+                closeStreakRewardModal();
+                N.streakRewardPending=false;
+            }
             function run(a){
                 if(a.t==='nextHangman'||a.t==='nextQuiz')clearOnlineAutoAdvance();
                 const beforeAnswered=state.questionAnswered;
@@ -2827,9 +2915,9 @@
                 else if(a.t==='revealQuiz')O.revealQuizAnswer();
                 else if(a.t==='skipQuiz')O.skipQuizPuzzle();
                 else if(a.t==='setTurn')O.setTeamTurn(a.v);
-                else if(a.t==='reward')O.applyStreakReward(a.v);
+                else if(a.t==='reward')applyStreakRewardRemote(a.v);
                 else if(a.t==='timeout')O.handleQuestionTimeout();
-                if(N.role==='host'&&!beforeAnswered&&state.questionAnswered)markOnlineQuestionResolved(a.t);
+                if(N.role==='host'&&!beforeAnswered&&state.questionAnswered&&a.t!=='reward')markOnlineQuestionResolved(a.t);
             }
             function setInteractionLocked(lock,opts={}){
                 const preserveInput=!!opts.preserveInput;
@@ -2860,6 +2948,7 @@
                 }
             }
             const O={};['handleHangmanGuess','nextHangman','giveHangmanHint','skipHangmanPuzzle','handleQuizSubmit','nextQuiz','giveQuizHint','revealQuizAnswer','skipQuizPuzzle','setTeamTurn','applyStreakReward','handleQuestionTimeout','endMatch'].forEach(n=>O[n]=window[n]);
+            window.O = O;
             function sendAct(a,fromQueue=false){
                 if(!(N.started&&N.phase==='playing'&&N.team===state.activeTurn))return false;
                 const hc=N.role==='host'?null:hostConnection();
@@ -2872,6 +2961,7 @@
                 if(N.role==='host'){N.remote=true;try{run(a);}finally{N.remote=false;}sendState();}
                 return true;
             }
+            window.onlineSendAct = sendAct;
             window.handleHangmanGuess=function(v){if((N.role==='client'||N.role==='host')&&!N.remote&&N.phase==='playing'){if(N.team!==state.activeTurn)return;sendAct({t:'hangmanGuess',v});return;}const before=state.questionAnswered;const r=O.handleHangmanGuess.apply(this,arguments);if(N.role==='host'&&!N.remote&&!before&&state.questionAnswered)markOnlineQuestionResolved('hangmanGuess');if(N.role==='host'&&!N.remote)sendState();return r;};
             window.nextHangman=function(){if(!N.remote&&N.phase==='playing'&&(N.role==='client'||N.role==='host')){if(N.team!==state.activeTurn)return;if(!confirmOnlineManualNext('Hangman'))return;sendAct({t:'nextHangman'});return;}clearOnlineAutoAdvance();const r=O.nextHangman.apply(this,arguments);if(N.role==='host'&&!N.remote)sendState();return r;};
             window.giveHangmanHint=function(){if(!N.remote&&N.phase==='playing'&&(N.role==='client'||N.role==='host')){if(N.team!==state.activeTurn)return;sendAct({t:'hintHangman'});return;}const r=O.giveHangmanHint.apply(this,arguments);if(N.role==='host'&&!N.remote)sendState();return r;};
@@ -2882,7 +2972,7 @@
             window.revealQuizAnswer=function(){if(!N.remote&&N.phase==='playing'&&(N.role==='client'||N.role==='host')){if(N.team!==state.activeTurn)return;sendAct({t:'revealQuiz'});return;}const before=state.questionAnswered;const r=O.revealQuizAnswer.apply(this,arguments);if(N.role==='host'&&!N.remote&&!before&&state.questionAnswered)markOnlineQuestionResolved('revealQuiz');if(N.role==='host'&&!N.remote)sendState();return r;};
             window.skipQuizPuzzle=function(){if(!N.remote&&N.phase==='playing'&&(N.role==='client'||N.role==='host')){if(N.team!==state.activeTurn)return;sendAct({t:'skipQuiz'});return;}const r=O.skipQuizPuzzle.apply(this,arguments);if(N.role==='host'&&!N.remote)sendState();return r;};
             window.setTeamTurn=function(v){if(!N.remote&&N.phase==='playing'&&(N.role==='client'||N.role==='host')){sendAct({t:'setTurn',v});return;}const r=O.setTeamTurn.apply(this,arguments);if(N.role==='host'&&!N.remote)sendState();return r;};
-            window.applyStreakReward=function(v){if(!N.remote&&N.phase==='playing'&&(N.role==='client'||N.role==='host')){sendAct({t:'reward',v});return;}const r=O.applyStreakReward.apply(this,arguments);if(N.role==='host'&&!N.remote)sendState();return r;};
+            window.applyStreakReward=function(v){return O.applyStreakReward.apply(this,arguments);};
             window.handleQuestionTimeout=function(){
                 // Timeout is authoritative and driven by the Host's local question timer.
                 // Do NOT gate the Host timeout by Host team ownership: when Red is active,
