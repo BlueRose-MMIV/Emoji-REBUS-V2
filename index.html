@@ -2069,8 +2069,16 @@
             if (state.mode === 'team') updateMultiplayerScoreboard();
         }
 
+        function getStreakRewardOwnerTeam() {
+            if (N && typeof N.streakRewardKey === 'string' && N.streakRewardKey) {
+                const owner = N.streakRewardKey.split(':')[0];
+                if (owner === 'a' || owner === 'b') return owner;
+            }
+            return state.activeTurn;
+        }
+
         function triggerStreakRewardModal() {
-            const team = state.activeTurn;
+            const team = getStreakRewardOwnerTeam();
             const streak = team === 'a' ? state.teamA.streak : state.teamB.streak;
             const key = `${team}:${streak}:${state.currentPuzzleIndex}`;
             // Never reopen the same reward chooser from repeated renders/snapshots.
@@ -2089,16 +2097,24 @@
             const modal = document.getElementById('streak-reward-modal');
             modal?.classList.remove('hidden');
             const title = document.getElementById('streak-reward-title');
+            const desc = document.getElementById('streak-reward-desc');
+            const online = !!(N && (N.role === 'host' || N.role === 'client') && N.phase === 'playing');
+            const canChoose = !online || N.team === team;
             if (title) {
                 if (team === 'a') {
-                    title.textContent = 'BLUE TEAM: 5-STREAK BONUS!';
+                    title.textContent = canChoose ? 'BLUE TEAM: 5-STREAK BONUS!' : 'BLUE TEAM: 5-STREAK BONUS — WAITING FOR BLUE';
                     title.className = 'text-xl sm:text-2xl font-black font-display text-blue-700 uppercase';
                 } else {
-                    title.textContent = 'RED TEAM: 5-STREAK BONUS!';
+                    title.textContent = canChoose ? 'RED TEAM: 5-STREAK BONUS!' : 'RED TEAM: 5-STREAK BONUS — WAITING FOR RED';
                     title.className = 'text-xl sm:text-2xl font-black font-display text-red-700 uppercase';
                 }
             }
-            updateStreakRewardButtons?.(false);
+            if (desc) {
+                desc.textContent = canChoose
+                    ? 'Choose your advantage:'
+                    : `The ${team === 'a' ? 'Blue' : 'Red'} Team earned the 5-streak. Waiting for that player to choose.`;
+            }
+            updateStreakRewardButtons?.(!canChoose);
         }
 
         function updateStreakRewardButtons(busy) {
@@ -2116,20 +2132,31 @@
             const modal = document.getElementById('streak-reward-modal');
             modal?.classList.add('hidden');
             updateStreakRewardButtons(false);
-            if (N) N.streakRewardPending = false;
+            if (N) {
+                N.streakRewardPending = false;
+                clearTimeout(N.onlineRewardTimeout);
+                N.onlineRewardTimeout = null;
+            }
         }
 
         function applyStreakReward(type) {
             const R = window.N || null;
             const sendReward = window.onlineSendAct;
             const RuntimeO = window.O || null;
+            const ownerTeam = getStreakRewardOwnerTeam();
+            if (R && R.phase === 'playing' && (R.role === 'client' || R.role === 'host') && R.team !== ownerTeam && !R.remote) {
+                // In online play only the player/team that earned the streak may choose the reward.
+                // The other device stays in a read-only waiting state.
+                return;
+            }
             updateStreakRewardButtons(true);
 
             if (R && R.phase === 'playing' && !R.remote && (R.role === 'client' || R.role === 'host')) {
                 if (R.role === 'client') {
                     const sent = typeof sendReward === 'function' ? sendReward({t:'reward',v:type}) : false;
-                    closeStreakRewardModal();
-                    if (!sent) {
+                    if (sent) {
+                        closeStreakRewardModal();
+                    } else {
                         document.getElementById('streak-reward-modal')?.classList.remove('hidden');
                         updateStreakRewardButtons(false);
                     }
@@ -2149,11 +2176,15 @@
                     else if (type === 'nextQuestionBonus') state.streakRisk={team:state.activeTurn};
                 } finally { R.remote=false; }
                 closeStreakRewardModal();
+                clearTimeout(R.onlineRewardTimeout);
+                R.onlineRewardTimeout=null;
                 R.streakRewardPending=false;
                 R.streakRewardKey=`${state.activeTurn}:${state.teamA.streak}:${state.currentPuzzleIndex}`;
                 playSFX('click'); updateScoresUI();
                 if(typeof window.sendState==='function') window.sendState();
                 clearTimeout(R.onlineAdvanceTimer);
+                clearTimeout(R.onlineRewardTimeout);
+                R.onlineRewardTimeout=null;
                 R.onlineAdvanceTimer=setTimeout(()=>{
                     if(R.destroying||R.role!=='host'||R.phase!=='playing'||!state.questionAnswered)return;
                     const tab=state.activeTab; R.remote=true;
@@ -2437,7 +2468,7 @@
                 joinTimer:null,recoveryTimer:null,actionSeq:0,lastSeenEvents:new Set(),mesh:new Map(),
                 pendingPeers:new Set(),hostPeerId:'',connecting:false,reconnecting:false,destroying:false,
                 reconnectAttempts:0,meshEventCounter:0,lastSeenStates:new Set(),
-                networkRecovering:false,recoveryCycle:0,hostConnToken:0,pendingActions:[],actionFlushTimer:null,onlineFeedback:null,onlineFeedbackVersion:0,onlineAdvanceTimer:null,streakRewardPending:false,lastInputLockReason:'',iceGraceTimer:null,lastHostPathChangeAt:0
+                networkRecovering:false,recoveryCycle:0,hostConnToken:0,pendingActions:[],actionFlushTimer:null,onlineFeedback:null,onlineFeedbackVersion:0,onlineAdvanceTimer:null,onlineRewardTimeout:null,streakRewardPending:false,lastInputLockReason:'',iceGraceTimer:null,lastHostPathChangeAt:0
             };
             window.N = N;
             const ACTIONS=['hangmanGuess','nextHangman','hintHangman','skipQuiz','quizSubmit','nextQuiz','hintQuiz','revealQuiz','skipHangman','setTurn','reward','timeout'];
@@ -2600,13 +2631,13 @@
                 N.generation++;stopTimers();N.destroying=true;
                 N.mesh.forEach(c=>{try{c.close();}catch{}});N.mesh.clear();N.pendingPeers.clear();N.players.clear();
                 try{N.peer?.destroy();}catch{}N.peer=null;N.destroying=false;
-                N.ready=false;N.started=false;N.phase='idle';N.role=null;N.code='';N.seq=0;N.lastAppliedSeq=0;N.remote=false;N.connecting=false;N.reconnecting=false;N.hostPeerId='';N.lastSnapshotAt=0;N.reconnectAttempts=0;N.actionSeq=0;N.lastSeenEvents.clear();N.lastSeenStates.clear();N.meshEventCounter=0;N.networkRecovering=false;N.recoveryCycle++;N.hostConnToken=0;N.pendingActions=[];clearTimeout(N.actionFlushTimer);N.actionFlushTimer=null;clearTimeout(N.onlineAdvanceTimer);N.onlineAdvanceTimer=null;N.onlineFeedback=null;N.onlineFeedbackVersion=0;N.streakRewardPending=false;N.streakRewardKey='';N.streakRewardBusy=false;document.getElementById('online-health-float')?.classList.remove('show');
+                N.ready=false;N.started=false;N.phase='idle';N.role=null;N.code='';N.seq=0;N.lastAppliedSeq=0;N.remote=false;N.connecting=false;N.reconnecting=false;N.hostPeerId='';N.lastSnapshotAt=0;N.reconnectAttempts=0;N.actionSeq=0;N.lastSeenEvents.clear();N.lastSeenStates.clear();N.meshEventCounter=0;N.networkRecovering=false;N.recoveryCycle++;N.hostConnToken=0;N.pendingActions=[];clearTimeout(N.actionFlushTimer);N.actionFlushTimer=null;clearTimeout(N.onlineAdvanceTimer);N.onlineAdvanceTimer=null;clearTimeout(N.onlineRewardTimeout);N.onlineRewardTimeout=null;N.onlineFeedback=null;N.onlineFeedbackVersion=0;N.streakRewardPending=false;N.streakRewardKey='';N.streakRewardBusy=false;document.getElementById('online-health-float')?.classList.remove('show');
             }
             function pack(){
                 return {v:3,activeTab:state.activeTab,mode:state.mode,currentPuzzleIndex:state.currentPuzzleIndex,questionAnswered:state.questionAnswered,quizResetVersion:N.quizResetVersion,
                     availableIndices:[...state.availableIndices],soloScore:state.soloScore,soloStreak:state.soloStreak,teamA:{...state.teamA},teamB:{...state.teamB},activeTurn:state.activeTurn,
                     hangmanHearts:state.hangmanHearts,hangmanGuessedLetters:[...state.hangmanGuessedLetters],hangmanHintUsed:state.hangmanHintUsed,quizHintUsed:state.quizHintUsed,
-                    questionTimeLeft:state.questionTimeLeft,globalTimeLeft:state.globalTimeLeft,streakRisk:state.streakRisk,streakRewardKey:N.streakRewardKey||'',baseTimerDuration:state.baseTimerDuration,matchDurationMinutes:state.matchDurationMinutes,phase:N.phase,onlineFeedback:N.onlineFeedback};
+                    questionTimeLeft:state.questionTimeLeft,globalTimeLeft:state.globalTimeLeft,streakRisk:state.streakRisk,streakRewardKey:N.streakRewardKey||'',streakRewardPending:!!N.streakRewardPending,baseTimerDuration:state.baseTimerDuration,matchDurationMinutes:state.matchDurationMinutes,phase:N.phase,onlineFeedback:N.onlineFeedback};
             }
             function confirmOnlineManualNext(label){
                 if(!(N.role==='host'||N.role==='client')||N.phase!=='playing'||!state.questionAnswered)return true;
@@ -2656,8 +2687,12 @@
                 clearTimeout(N.onlineAdvanceTimer);
                 N.onlineFeedback={version:++N.onlineFeedbackVersion,tab:state.activeTab,ok,text};
                 showOnlineAutoFeedback(N.onlineFeedback);
-                N.onlineAdvanceTimer=setTimeout(()=>{
+                const advanceAfter = () => {
                     if(N.destroying||N.role!=='host'||N.phase!=='playing'||!state.questionAnswered)return;
+                    if(N.streakRewardPending){
+                        // Reward chooser owns the transition timing.
+                        return;
+                    }
                     const nextTab=state.activeTab;
                     N.remote=true;
                     try{
@@ -2667,7 +2702,19 @@
                     N.onlineFeedback=null;
                     N.onlineAdvanceTimer=null;
                     sendState();
-                },3000);
+                };
+                N.onlineAdvanceTimer=setTimeout(advanceAfter,3000);
+                // Do not let an abandoned reward chooser deadlock the match forever.
+                if(N.streakRewardPending){
+                    clearTimeout(N.onlineRewardTimeout);
+                    N.onlineRewardTimeout=setTimeout(()=>{
+                        if(N.destroying||N.role!=='host'||N.phase!=='playing'||!N.streakRewardPending)return;
+                        closeStreakRewardModal();
+                        N.streakRewardPending=false;
+                        N.streakRewardBusy=false;
+                        advanceAfter();
+                    },15000);
+                }
             }
 
             function apply(s,seq){
@@ -2676,7 +2723,16 @@
                 if(typeof s.quizResetVersion==='number')N.lastQuizResetVersion=s.quizResetVersion;
                 Object.assign(state,{activeTab:s.activeTab,mode:s.mode,currentPuzzleIndex:s.currentPuzzleIndex,questionAnswered:!!s.questionAnswered,availableIndices:s.availableIndices||[],soloScore:s.soloScore,soloStreak:s.soloStreak,teamA:{...state.teamA,...s.teamA},teamB:{...state.teamB,...s.teamB},activeTurn:s.activeTurn,hangmanHearts:s.hangmanHearts,hangmanGuessedLetters:new Set(s.hangmanGuessedLetters||[]),hangmanHintUsed:s.hangmanHintUsed,quizHintUsed:s.quizHintUsed,questionTimeLeft:s.questionTimeLeft,globalTimeLeft:s.globalTimeLeft,streakRisk:s.streakRisk||null,baseTimerDuration:s.baseTimerDuration,matchDurationMinutes:s.matchDurationMinutes});
                 if (typeof s.streakRewardKey === 'string' && s.streakRewardKey) { N.streakRewardKey=s.streakRewardKey; }
-                if (!s.streakRewardPending && N.streakRewardBusy) closeStreakRewardModal();
+                if (typeof s.streakRewardPending === 'boolean') {
+                    N.streakRewardPending = s.streakRewardPending;
+                }
+                if (s.streakRewardPending && state.mode === 'team' && N.phase !== 'ended' && N.streakRewardKey) {
+                    const winningTeam = state.activeTurn;
+                    if (N.role === 'client' && N.team === winningTeam) {
+                        triggerStreakRewardModal();
+                    }
+                }
+                if (!s.streakRewardPending && (N.streakRewardBusy || (N.role==='client' && !document.getElementById('streak-reward-modal')?.classList.contains('hidden')))) closeStreakRewardModal();
                 const incomingFeedback=s.onlineFeedback;
                 const feedbackChanged=!!incomingFeedback&&incomingFeedback.version!==N.onlineFeedbackVersion;
                 if(incomingFeedback&&incomingFeedback.version>N.onlineFeedbackVersion){N.onlineFeedbackVersion=incomingFeedback.version;N.onlineFeedback=incomingFeedback;}
@@ -2888,6 +2944,7 @@
             function renderPlayers(){const e=document.getElementById('or-players');if(!e)return;let b=0;N.players.forEach(p=>{if(p.team==='b')b++;});e.innerHTML=`🔵 Blue: 1 &nbsp; 🔴 Red: ${b}`;const start=document.getElementById('or-start'),note=document.getElementById('or-wait-note');if(start&&N.role==='host'){const ready=b>0;start.disabled=!ready;start.textContent=ready?'START GAME FOR EVERYONE':'WAITING FOR PLAYER…';start.className=ready?'solid-btn bg-emerald-400 text-slate-900 w-full py-2 mt-3 font-black':'solid-btn bg-slate-300 text-slate-500 w-full py-2 mt-3 font-black cursor-not-allowed';if(note)note.textContent=ready?'Player joined the mesh — Host can start the match.':'Waiting for a player to join the mesh…';}}
             function valid(a){return !!(a&&ACTIONS.includes(a.t));}
             function applyStreakRewardRemote(type) {
+                if(!N.streakRewardPending || !['steal','debuffTime','nextQuestionBonus'].includes(type))return;
                 const activeTeam = state.activeTurn === 'a' ? state.teamA : state.teamB;
                 const oppTeam = state.activeTurn === 'a' ? state.teamB : state.teamA;
                 if (type === 'steal') {
@@ -2915,7 +2972,7 @@
                 else if(a.t==='revealQuiz')O.revealQuizAnswer();
                 else if(a.t==='skipQuiz')O.skipQuizPuzzle();
                 else if(a.t==='setTurn')O.setTeamTurn(a.v);
-                else if(a.t==='reward')applyStreakRewardRemote(a.v);
+                else if(a.t==='reward' && N.streakRewardPending)applyStreakRewardRemote(a.v);
                 else if(a.t==='timeout')O.handleQuestionTimeout();
                 if(N.role==='host'&&!beforeAnswered&&state.questionAnswered&&a.t!=='reward')markOnlineQuestionResolved(a.t);
             }
