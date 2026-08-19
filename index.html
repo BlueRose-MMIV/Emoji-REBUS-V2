@@ -2342,39 +2342,39 @@
 
 
         // ================================================================
-        // ONLINE ROOM EXTENSION - multiplayer networking only
+        // ONLINE ROOM EXTENSION - P2P mesh prototype
         // ================================================================
         (function(){
             /*
-             * ZERO-CONFIG ONLINE MULTIPLAYER
-             * --------------------------------
-             * Transport: WebRTC data channels via PeerJS.
-             * Signaling: PeerJS Cloud (no project URL / API key required).
-             * Game model: Host-authoritative state, client sends actions.
-             *
-             * This keeps the game as ONE HTML file. Players only need a
-             * room code or invite link. No Supabase configuration is shown.
+             * ZERO-CONFIG P2P MESH ONLINE MULTIPLAYER - V7 PROTOTYPE
+             * --------------------------------------------------------
+             * Transport: WebRTC DataChannels via PeerJS.
+             * Signaling: PeerJS Cloud only (room discovery/bootstrap).
+             * Data plane: P2P mesh. Every connected peer can forward action/state packages.
+             * Game authority: Host remains the deterministic game-state authority for now.
+             * This is deliberately an incremental rework: network traffic is decentralized
+             * while the existing game rules remain unchanged.
              */
             const N={
-                role:null,code:'',peer:null,conn:null,team:'a',started:false,phase:'idle',remote:false,
-                clock:null,ready:false,seq:0,lastAppliedSeq:0,quizResetVersion:0,
-                lastQuizResetVersion:0,clientId:'',players:new Map(),generation:0,
-                joinTimer:null,stateTimer:null,clientWatchdog:null,recoveryTimer:null,actionSeq:0,lastActionByPeer:new Map(),
-                lastSnapshotAt:0,connecting:false,hostPeerId:'',destroying:false,reconnectAttempts:0,lastHealthAt:0,
-                reconnecting:false,lastConnOpenAt:0
+                role:null,code:'',peer:null,team:'a',started:false,phase:'idle',remote:false,
+                ready:false,seq:0,lastAppliedSeq:0,quizResetVersion:0,lastQuizResetVersion:0,
+                clientId:'',players:new Map(),generation:0,clock:null,stateTimer:null,clientWatchdog:null,
+                joinTimer:null,recoveryTimer:null,actionSeq:0,lastSeenEvents:new Set(),mesh:new Map(),
+                pendingPeers:new Set(),hostPeerId:'',connecting:false,reconnecting:false,destroying:false,
+                reconnectAttempts:0,meshEventCounter:0,lastSeenStates:new Set()
             };
             const ACTIONS=['hangmanGuess','nextHangman','hintHangman','skipQuiz','quizSubmit','nextQuiz','hintQuiz','revealQuiz','skipHangman','setTurn','reward','timeout'];
-            const SYNC_INTERVAL=750, JOIN_HEARTBEAT=3000, MAX_JOIN_WAIT=30000, STALE_ACTION_MS=15000;
-            const RECONNECT_BASE=1200, RECONNECT_MAX=10000, WATCHDOG_STALE=6000;
+            const SYNC_INTERVAL=750, JOIN_HEARTBEAT=3000, MAX_JOIN_WAIT=30000, WATCHDOG_STALE=6000;
+            const RECONNECT_BASE=1200, RECONNECT_MAX=10000, MAX_MESH_PEERS=6;
             const PEER_ID_PREFIX='emoji-rebus-room-';
-
+        
             function isOnlinePage(){
                 try{
                     const protocol=String(location.protocol||'').toLowerCase();
                     const host=String(location.hostname||'').toLowerCase();
-                    if(protocol==='file:') return false;
-                    if(protocol==='https:') return true;
-                    return protocol==='http:' && ['localhost','127.0.0.1','[::1]'].includes(host);
+                    if(protocol==='file:')return false;
+                    if(protocol==='https:')return true;
+                    return protocol==='http:'&&['localhost','127.0.0.1','[::1]'].includes(host);
                 }catch{return false;}
             }
             function readyForOnline(){
@@ -2391,12 +2391,9 @@
             function escRoom(v){return typeof esc==='function'?esc(v):String(v).replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));}
             function clientId(){return N.clientId||(N.clientId=(crypto?.randomUUID?crypto.randomUUID():`p-${Date.now()}-${Math.random().toString(36).slice(2)}`));}
             function makeRoomCode(){
-                const chars='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
-                let out='';
-                const bytes=new Uint8Array(6);
+                const chars='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';let out='';const bytes=new Uint8Array(6);
                 try{crypto.getRandomValues(bytes);}catch{for(let i=0;i<6;i++)bytes[i]=Math.floor(Math.random()*256);}
-                for(let i=0;i<6;i++)out+=chars[bytes[i]%chars.length];
-                return out;
+                for(let i=0;i<6;i++)out+=chars[bytes[i]%chars.length];return out;
             }
             function peerIdForCode(code){return `${PEER_ID_PREFIX}${String(code||'').toLowerCase()}`;}
             function modal(){return document.getElementById('online-room-modal');}
@@ -2404,300 +2401,198 @@
             function ensureUI(){
                 if(document.getElementById('online-room-modal'))return;
                 const m=document.createElement('div');
-                m.id='online-room-modal';
-                m.className='hidden fixed inset-0 z-[200] flex items-center justify-center bg-slate-900/85 p-4';
-                m.innerHTML=`<div class="solid-card bg-white p-5 max-w-md w-full border-4 border-slate-900"><div class="flex justify-between items-center"><h2 class="text-xl font-black uppercase">🌐 Online Room</h2><button id="or-close" class="solid-btn bg-slate-200 px-3 py-1 font-black">✕</button></div><div id="or-health" class="online-health warn spin mt-3"><span class="online-health-dot"></span><span id="or-health-text">CONNECTING…</span></div><p id="or-status" class="text-xs font-bold text-slate-500 my-3"></p><div id="or-panel" class="mt-3"></div><div id="or-players" class="mt-3 text-xs font-bold"></div><div id="or-recovery" class="online-recovery-actions hidden"><button id="or-retry" class="solid-btn bg-yellow-400 text-slate-900 py-2 font-black">↻ RETRY CONNECTION</button></div></div>`;
+                m.id='online-room-modal';m.className='hidden fixed inset-0 z-[200] flex items-center justify-center bg-slate-900/85 p-4';
+                m.innerHTML=`<div class="solid-card bg-white p-5 max-w-md w-full border-4 border-slate-900"><div class="flex justify-between items-center"><h2 class="text-xl font-black uppercase">🌐 Online Room</h2><button id="or-close" class="solid-btn bg-slate-200 px-3 py-1 font-black">✕</button></div><div id="or-health" class="online-health warn my-2"><span class="online-health-dot"></span><span id="or-health-text">CONNECTING…</span><span class="ml-auto text-[10px] font-black">P2P MESH</span></div><p id="or-status" class="text-xs font-bold text-slate-500 my-3"></p><div id="or-panel" class="mt-3"></div><div id="or-recovery" class="hidden text-center mt-2"><button id="or-retry" class="solid-btn bg-yellow-400 text-slate-900 w-full py-2 font-black">↻ RETRY CONNECTION</button></div></div>`;
                 document.body.appendChild(m);
-                if(!document.getElementById('online-health-float')){
-                    const f=document.createElement('div');
-                    f.id='online-health-float';
-                    f.className='online-health-float';
-                    f.innerHTML='<span class="online-health-dot"></span><span id="or-health-float-text">ONLINE</span><button id="or-health-float-retry" title="Retry connection">↻</button>';
-                    document.body.appendChild(f);
-                    document.getElementById('or-health-float-retry').onclick=()=>{if(N.role==='client')manualReconnect();else status('Host room is active. Wait for the player or create a new room.',true);};
-                }
+                const f=document.createElement('div');f.id='online-health-float';f.className='online-health-float';
+                f.innerHTML='<span class="online-health-dot"></span><span id="or-health-float-text">ONLINE</span><button id="or-health-float-retry" title="Retry connection">↻</button>';
+                document.body.appendChild(f);
+                document.getElementById('or-health-float-retry').onclick=()=>{if(N.role==='client')manualReconnect();else status('Host room is active. Wait for players or create a new room.',true);};
                 document.getElementById('or-close').onclick=()=>{cleanup();m.classList.add('hidden');setInteractionLocked(false);};
-                document.getElementById('or-retry').onclick=()=>manualReconnect();
+                document.getElementById('or-retry').onclick=manualReconnect;
             }
             function showLobby(title,body){ensureUI();document.getElementById('or-panel').innerHTML=`<div class="text-center"><div class="font-black uppercase mb-2">${title}</div>${body}</div>`;modal().classList.remove('hidden');}
             function setHealth(kind,text,recover=false){
-                ensureUI();
-                const box=document.getElementById('or-health'),label=document.getElementById('or-health-text'),rec=document.getElementById('or-recovery');
-                if(box){box.className=`online-health ${kind==='ok'?'ok':kind==='bad'?'bad':'warn'} ${kind==='spin'?'spin':''}`;}
-                if(label)label.textContent=text;
-                if(rec)rec.classList.toggle('hidden',!recover);
+                ensureUI();const box=document.getElementById('or-health'),label=document.getElementById('or-health-text'),rec=document.getElementById('or-recovery');
+                if(box)box.className=`online-health ${kind==='ok'?'ok':kind==='bad'?'bad':'warn'}`;if(label)label.textContent=text;if(rec)rec.classList.toggle('hidden',!recover);
                 const f=document.getElementById('online-health-float'),ft=document.getElementById('or-health-float-text');
                 if(f){f.className=`online-health-float show ${kind==='ok'?'ok':kind==='bad'?'bad':'warn'}`;if(ft)ft.textContent=text;f.querySelector('button')?.classList.toggle('hidden',!(N.role==='client'&&(kind!=='ok'||recover)));}
-                N.lastHealthAt=Date.now();
             }
             function status(x,ok=true){ensureUI();const e=document.getElementById('or-status');if(e){e.textContent=x;e.className=`text-xs font-bold my-3 ${ok?'text-emerald-600':'text-red-600'}`;}}
-            function scheduleReconnect(reason){
-                if(N.destroying||N.role!=='client')return;
-                clearTimeout(N.recoveryTimer);
-                N.reconnectAttempts=Math.min(N.reconnectAttempts+1,8);
-                const delay=Math.min(RECONNECT_MAX,RECONNECT_BASE*Math.pow(1.7,Math.max(0,N.reconnectAttempts-1))) + Math.floor(Math.random()*350);
-                N.reconnecting=true;
-                setHealth('warn','RECONNECTING…',true);
-                status(reason||`Reconnecting in ${Math.ceil(delay/1000)}s…`,false);
-                N.recoveryTimer=setTimeout(()=>{if(N.destroying||N.role!=='client')return;try{N.conn?.close();}catch{};N.conn=null;connectToHost(true);},delay);
+        
+            function meshConnections(){return [...N.mesh.values()].filter(c=>c&&c.open);}
+            function meshCount(){return meshConnections().length;}
+            function updateMeshHealth(){
+                if(!N.role)return;
+                const count=meshCount();
+                if(N.role==='host')setHealth('ok',`MESH ONLINE · ${count} PEER${count===1?'':'S'}`,false);
+                else if(count>0)setHealth('ok',`MESH CONNECTED · ${count} PEER${count===1?'':'S'}`,false);
             }
-            function manualReconnect(){
-                if(N.role!=='client')return;
-                clearTimeout(N.recoveryTimer);
-                N.reconnectAttempts=0;
-                setHealth('warn','RECONNECTING…',true);
-                status('Retrying connection to Host…',false);
-                try{N.conn?.close();}catch{}
-                connectToHost(true);
-            }
+            function stopTimers(){clearInterval(N.clock);clearInterval(N.joinTimer);clearTimeout(N.stateTimer);clearInterval(N.clientWatchdog);clearTimeout(N.recoveryTimer);N.clock=N.joinTimer=N.stateTimer=N.clientWatchdog=N.recoveryTimer=null;}
             function cleanup(){
-                N.generation++;
-                clearInterval(N.clock);clearInterval(N.joinTimer);clearTimeout(N.stateTimer);clearInterval(N.clientWatchdog);clearTimeout(N.recoveryTimer);
-                N.clock=N.joinTimer=N.stateTimer=N.clientWatchdog=N.recoveryTimer=null;
-                N.destroying=true;
-                try{N.conn?.close();}catch{}
-                N.players.clear();N.conn=null;
-                try{N.peer?.destroy();}catch{}
-                N.peer=null;N.destroying=false;
-                N.ready=false;N.started=false;N.phase='idle';N.role=null;N.code='';N.seq=0;N.lastAppliedSeq=0;N.remote=false;N.connecting=false;N.hostPeerId='';
-                N.actionSeq=0;N.lastActionByPeer.clear();N.lastSnapshotAt=0;N.quizResetVersion=0;N.lastQuizResetVersion=0;N.reconnectAttempts=0;N.reconnecting=false;N.lastConnOpenAt=0;
-                document.getElementById('online-health-float')?.classList.remove('show');
+                N.generation++;stopTimers();N.destroying=true;
+                N.mesh.forEach(c=>{try{c.close();}catch{}});N.mesh.clear();N.pendingPeers.clear();N.players.clear();
+                try{N.peer?.destroy();}catch{}N.peer=null;N.destroying=false;
+                N.ready=false;N.started=false;N.phase='idle';N.role=null;N.code='';N.seq=0;N.lastAppliedSeq=0;N.remote=false;N.connecting=false;N.reconnecting=false;N.hostPeerId='';N.lastSnapshotAt=0;N.reconnectAttempts=0;N.actionSeq=0;N.lastSeenEvents.clear();N.lastSeenStates.clear();N.meshEventCounter=0;document.getElementById('online-health-float')?.classList.remove('show');
             }
             function pack(){
-                return {
-                    v:3,activeTab:state.activeTab,mode:state.mode,currentPuzzleIndex:state.currentPuzzleIndex,
-                    questionAnswered:state.questionAnswered,quizResetVersion:N.quizResetVersion,
-                    availableIndices:[...state.availableIndices],soloScore:state.soloScore,soloStreak:state.soloStreak,
-                    teamA:{...state.teamA},teamB:{...state.teamB},activeTurn:state.activeTurn,
-                    hangmanHearts:state.hangmanHearts,hangmanGuessedLetters:[...state.hangmanGuessedLetters],
-                    hangmanHintUsed:state.hangmanHintUsed,quizHintUsed:state.quizHintUsed,
-                    questionTimeLeft:state.questionTimeLeft,globalTimeLeft:state.globalTimeLeft,
-                    streakRisk:state.streakRisk,baseTimerDuration:state.baseTimerDuration,
-                    matchDurationMinutes:state.matchDurationMinutes,phase:N.phase
-                };
+                return {v:3,activeTab:state.activeTab,mode:state.mode,currentPuzzleIndex:state.currentPuzzleIndex,questionAnswered:state.questionAnswered,quizResetVersion:N.quizResetVersion,
+                    availableIndices:[...state.availableIndices],soloScore:state.soloScore,soloStreak:state.soloStreak,teamA:{...state.teamA},teamB:{...state.teamB},activeTurn:state.activeTurn,
+                    hangmanHearts:state.hangmanHearts,hangmanGuessedLetters:[...state.hangmanGuessedLetters],hangmanHintUsed:state.hangmanHintUsed,quizHintUsed:state.quizHintUsed,
+                    questionTimeLeft:state.questionTimeLeft,globalTimeLeft:state.globalTimeLeft,streakRisk:state.streakRisk,baseTimerDuration:state.baseTimerDuration,matchDurationMinutes:state.matchDurationMinutes,phase:N.phase};
             }
             function apply(s,seq){
-                if(!s)return;
-                if(seq&&seq<N.lastAppliedSeq)return;
-                N.lastAppliedSeq=seq||N.lastAppliedSeq;
-                N.lastSnapshotAt=Date.now();
-                const old=state.currentPuzzleIndex,oldTab=state.activeTab;
-                const puzzleChanged=old!==s.currentPuzzleIndex,tabChanged=oldTab!==s.activeTab;
-                const remoteQuizReset=typeof s.quizResetVersion==='number'&&s.quizResetVersion!==N.lastQuizResetVersion;
+                if(!s||seq<N.lastAppliedSeq)return;N.lastAppliedSeq=seq||N.lastAppliedSeq;N.lastSnapshotAt=Date.now();
+                const old=state.currentPuzzleIndex,oldTab=state.activeTab,puzzleChanged=old!==s.currentPuzzleIndex,tabChanged=oldTab!==s.activeTab,remoteQuizReset=typeof s.quizResetVersion==='number'&&s.quizResetVersion!==N.lastQuizResetVersion;
                 if(typeof s.quizResetVersion==='number')N.lastQuizResetVersion=s.quizResetVersion;
                 Object.assign(state,{activeTab:s.activeTab,mode:s.mode,currentPuzzleIndex:s.currentPuzzleIndex,questionAnswered:!!s.questionAnswered,availableIndices:s.availableIndices||[],soloScore:s.soloScore,soloStreak:s.soloStreak,teamA:{...state.teamA,...s.teamA},teamB:{...state.teamB,...s.teamB},activeTurn:s.activeTurn,hangmanHearts:s.hangmanHearts,hangmanGuessedLetters:new Set(s.hangmanGuessedLetters||[]),hangmanHintUsed:s.hangmanHintUsed,quizHintUsed:s.quizHintUsed,questionTimeLeft:s.questionTimeLeft,globalTimeLeft:s.globalTimeLeft,streakRisk:s.streakRisk||null,baseTimerDuration:s.baseTimerDuration,matchDurationMinutes:s.matchDurationMinutes});
-                if(s.phase==='ended'||Number(s.globalTimeLeft)<=0){N.phase='ended';N.started=false;stopCurrentQuestionTimer();}
-                else if(s.phase==='playing'){N.phase='playing';N.started=true;}
-                else {N.phase='lobby';N.started=false;}
+                N.phase=s.phase==='ended'||Number(s.globalTimeLeft)<=0?'ended':s.phase==='playing'?'playing':'lobby';N.started=N.phase==='playing';
+                if(N.phase==='ended'){stopCurrentQuestionTimer();clearInterval(state.globalTimerInterval);clearInterval(state.questionTimerInterval);}
                 if(N.role==='client'){clearInterval(state.globalTimerInterval);clearInterval(state.questionTimerInterval);state.globalTimerInterval=null;state.questionTimerInterval=null;}
                 if(remoteQuizReset){const qi=document.getElementById('quiz-input');if(qi){qi.value='';onQuizInputType(qi);}}
                 if(N.role==='client'&&N.started){document.getElementById('intro-overlay')?.classList.add('hidden');applyPlayerModeUI();if(tabChanged)startActivityFromSync(state.activeTab);}
                 if(N.role==='client'&&N.phase==='ended'){try{document.getElementById('intro-overlay')?.classList.add('hidden');}catch{}try{endMatch();}catch{}}
                 updateScoresUI();updateAvatarDisplays();updateGlobalTimerDisplay();updateQuestionTimerDisplay();
                 if(puzzleChanged){renderPuzzleFromState();if(N.role==='client')stopCurrentQuestionTimer();else restartCurrentQuestionTimer();}else renderTransientState();
-                if(state.activeTab==='hangman'){renderHangmanWordSlots();renderQWERTYKeycaps();updateHeartsUI();}
-                setInteractionLocked((N.role==='client'&&!N.started)||((N.role==='client'||N.role==='host')&&N.started&&state.activeTurn!==N.team));
+                if(state.activeTab==='hangman'){renderHangmanWordSlotsSynced();renderQWERTYKeycaps();updateHeartsUI();}setInteractionLocked((N.role==='client'&&!N.started)||((N.role==='client'||N.role==='host')&&N.started&&state.activeTurn!==N.team));
             }
-            function startActivityFromSync(tab){
-                stopCurrentQuestionTimer();clearInterval(state.globalTimerInterval);
-                document.getElementById('view-hangman').classList.add('hidden');document.getElementById('view-play').classList.add('hidden');document.getElementById('view-vocab').classList.add('hidden');
-                if(tab==='hangman'){document.getElementById('view-hangman').classList.remove('hidden');}
-                else if(tab==='play'){document.getElementById('view-play').classList.remove('hidden');}
-                else if(tab==='vocab'){document.getElementById('view-vocab').classList.remove('hidden');}
+            function startActivityFromSync(tab){stopCurrentQuestionTimer();clearInterval(state.globalTimerInterval);document.getElementById('view-hangman').classList.add('hidden');document.getElementById('view-play').classList.add('hidden');document.getElementById('view-vocab').classList.add('hidden');if(tab==='hangman')document.getElementById('view-hangman').classList.remove('hidden');else if(tab==='play')document.getElementById('view-play').classList.remove('hidden');else if(tab==='vocab')document.getElementById('view-vocab').classList.remove('hidden');}
+            function renderHangmanWordSlotsSynced(){const puzzle=puzzles[state.currentPuzzleIndex],container=document.getElementById('hm-word-slots');if(!puzzle||!container)return;container.innerHTML='';for(const char of puzzle.answer){const box=document.createElement('div');box.className='w-8 h-10 sm:w-11 sm:h-12 border-3 border-slate-900 rounded-xl bg-white font-black text-lg sm:text-2xl flex items-center justify-center shadow-[2px_2px_0px_0px_#0f172a]';if(state.hangmanGuessedLetters.has(char)){box.textContent=char;box.classList.add('bg-emerald-100','text-emerald-900');}else{box.textContent='_';box.classList.add('text-slate-400');}container.appendChild(box);}}
+            function renderPuzzleFromState(){const puzzle=puzzles[state.currentPuzzleIndex];if(!puzzle)return;document.getElementById('hm-feedback-overlay').classList.add('hidden');document.getElementById('quiz-feedback-overlay').classList.add('hidden');document.getElementById('reveal-confirm-modal').classList.add('hidden');document.getElementById('hm-hint-box').classList.toggle('hidden',!state.hangmanHintUsed);if(state.hangmanHintUsed)document.getElementById('hm-hint-text').textContent=puzzle.hint;document.getElementById('hint-boxes').innerHTML=state.quizHintUsed?`<div class="py-1 px-3 bg-amber-50 text-slate-900 text-xs sm:text-sm font-bold rounded-xl border-2 border-slate-900 text-center">💡 ${esc(puzzle.hint)}</div>`:'';document.getElementById('hm-part1').textContent=puzzle.part1;document.getElementById('hm-part2').textContent=puzzle.part2;document.getElementById('hm-category').textContent=puzzle.category;document.getElementById('hm-current-num').textContent=`${state.currentPuzzleIndex+1}/${puzzles.length}`;document.getElementById('quiz-part1').textContent=puzzle.part1;document.getElementById('quiz-part2').textContent=puzzle.part2;document.getElementById('quiz-category').textContent=puzzle.category;document.getElementById('quiz-current-num').textContent=`${state.currentPuzzleIndex+1}/${puzzles.length}`;renderHangmanWordSlotsSynced();renderQWERTYKeycaps();renderQuizTypedBoxes();updateHeartsUI();updateScoresUI();updateQuestionTimerDisplay();}
+            function renderTransientState(){if(state.activeTab==='hangman'){renderHangmanWordSlotsSynced();renderQWERTYKeycaps();updateHeartsUI();}renderQuizTypedBoxes();updateQuestionTimerDisplay();updateGlobalTimerDisplay();}
+        
+            function eventKey(p){return `${p.from||'unknown'}:${p.id||''}`;}
+            function rememberEvent(p){const k=eventKey(p);if(N.lastSeenEvents.has(k))return false;N.lastSeenEvents.add(k);if(N.lastSeenEvents.size>500){const first=N.lastSeenEvents.values().next().value;N.lastSeenEvents.delete(first);}return true;}
+            function sendToConn(conn,p){try{if(conn&&conn.open)conn.send(p);}catch{}}
+            function broadcastMesh(payload,excludeId=null){N.mesh.forEach((conn,id)=>{if(id!==excludeId)sendToConn(conn,payload);});}
+            function rosterPayload(){return {type:'roster',room:N.code,leader:N.hostPeerId,peers:[...new Set([N.hostPeerId,...N.players.keys()].filter(Boolean))].slice(0,MAX_MESH_PEERS)}}
+            function publishRoster(){const p=rosterPayload();broadcastMesh(p);}
+            function connectPeer(peerId){
+                if(!peerId||peerId===N.peer?.id||N.mesh.has(peerId)||N.pendingPeers.has(peerId)||N.mesh.size>=MAX_MESH_PEERS)return;
+                N.pendingPeers.add(peerId);
+                try{const conn=N.peer.connect(peerId,{reliable:true,serialization:'json',metadata:{clientId:N.clientId,room:N.code}});N.mesh.set(peerId,conn);attachMeshConnection(conn,peerId,false);}catch{}finally{N.pendingPeers.delete(peerId);}
             }
-            function renderHangmanWordSlotsSynced(){
-                const puzzle=puzzles[state.currentPuzzleIndex],container=document.getElementById('hm-word-slots');if(!puzzle||!container)return;
-                container.innerHTML='';
-                for(const char of puzzle.answer){const box=document.createElement('div');box.className='w-8 h-10 sm:w-11 sm:h-12 border-3 border-slate-900 rounded-xl bg-white font-black text-lg sm:text-2xl flex items-center justify-center shadow-[2px_2px_0px_0px_#0f172a]';if(state.hangmanGuessedLetters.has(char)){box.textContent=char;box.classList.add('bg-emerald-100','text-emerald-900');}else{box.textContent='_';box.classList.add('text-slate-400');}container.appendChild(box);}
-            }
-            function renderPuzzleFromState(){
-                const puzzle=puzzles[state.currentPuzzleIndex];if(!puzzle)return;
-                document.getElementById('hm-feedback-overlay').classList.add('hidden');document.getElementById('quiz-feedback-overlay').classList.add('hidden');document.getElementById('reveal-confirm-modal').classList.add('hidden');
-                document.getElementById('hm-hint-box').classList.toggle('hidden',!state.hangmanHintUsed);if(state.hangmanHintUsed)document.getElementById('hm-hint-text').textContent=puzzle.hint;
-                document.getElementById('hint-boxes').innerHTML=state.quizHintUsed?`<div class="py-1 px-3 bg-amber-50 text-slate-900 text-xs sm:text-sm font-bold rounded-xl border-2 border-slate-900 text-center">💡 ${esc(puzzle.hint)}</div>`:'';
-                document.getElementById('hm-part1').textContent=puzzle.part1;document.getElementById('hm-part2').textContent=puzzle.part2;document.getElementById('hm-category').textContent=puzzle.category;document.getElementById('hm-current-num').textContent=`${state.currentPuzzleIndex+1}/${puzzles.length}`;
-                document.getElementById('quiz-part1').textContent=puzzle.part1;document.getElementById('quiz-part2').textContent=puzzle.part2;document.getElementById('quiz-category').textContent=puzzle.category;document.getElementById('quiz-current-num').textContent=`${state.currentPuzzleIndex+1}/${puzzles.length}`;
-                renderHangmanWordSlotsSynced();renderQWERTYKeycaps();renderQuizTypedBoxes();updateHeartsUI();updateScoresUI();updateQuestionTimerDisplay();
-            }
-            function renderTransientState(){
-                if(state.activeTab==='hangman'){renderHangmanWordSlotsSynced();renderQWERTYKeycaps();updateHeartsUI();}
-                renderQuizTypedBoxes();updateQuestionTimerDisplay();updateGlobalTimerDisplay();
-            }
-            function sendEnvelope(payload,to=null){
-                const msg=payload&&typeof payload==='object'?payload:{};
-                if(to){try{N.conn?.send(msg);}catch{}}
-                else{try{N.conn?.send(msg);}catch{}}
-            }
-            function sendState(to=null){
-                if(N.role!=='host'||!N.ready||!N.conn||!N.conn.open)return;
-                N.seq++;
-                const payload={to,type:'state',state:pack(),started:N.started,phase:N.phase,seq:N.seq,serverTs:Date.now()};
-                sendEnvelope(payload,to);
-            }
-            function startHostTimers(){clearInterval(N.clock);N.clock=setInterval(()=>{if(N.started)sendState();},SYNC_INTERVAL);}
-            function startClientWatchdog(){
-                clearInterval(N.clientWatchdog);
-                N.clientWatchdog=setInterval(()=>{
-                    if(N.role!=='client'||N.phase!=='playing')return;
-                    const stale=N.lastSnapshotAt&&Date.now()-N.lastSnapshotAt>WATCHDOG_STALE;
-                    if(stale&&!N.reconnecting){
-                        setHealth('warn','CONNECTION UNSTABLE',true);
-                        scheduleReconnect('Host state sync is stale — attempting recovery…');
-                    }else if(N.conn?.open&&!N.reconnecting){
-                        setHealth('ok','CONNECTED',false);
-                    }
-                },2000);
-            }
-            function renderPlayers(){
-                const e=document.getElementById('or-players');if(!e)return;let a=1,b=0;N.players.forEach(p=>{if(p.team==='b')b++;});e.innerHTML=`🔵 Blue: ${a} &nbsp; 🔴 Red: ${b}`;
-                const start=document.getElementById('or-start'),note=document.getElementById('or-wait-note');
-                if(start&&N.role==='host'){const ready=N.players.size>0;start.disabled=!ready;start.textContent=ready?'START GAME FOR EVERYONE':'WAITING FOR PLAYER…';start.className=ready?'solid-btn bg-emerald-400 text-slate-900 w-full py-2 mt-3 font-black':'solid-btn bg-slate-300 text-slate-500 w-full py-2 mt-3 font-black cursor-not-allowed';if(note)note.textContent=ready?'Player joined — Host can start the match.':'Waiting for a player to join…';}
-            }
-            function valid(a){return !!(a&&ACTIONS.includes(a.t));}
-            function run(a){if(a.t==='hangmanGuess')O.handleHangmanGuess(a.v);else if(a.t==='nextHangman')O.nextHangman();else if(a.t==='hintHangman')O.giveHangmanHint();else if(a.t==='skipHangman')O.skipHangmanPuzzle();else if(a.t==='quizSubmit'){const q=document.getElementById('quiz-input');q.value=a.v||'';O.handleQuizSubmit({preventDefault(){},target:q});}else if(a.t==='nextQuiz')O.nextQuiz();else if(a.t==='hintQuiz')O.giveQuizHint();else if(a.t==='revealQuiz')O.revealQuizAnswer();else if(a.t==='skipQuiz')O.skipQuizPuzzle();else if(a.t==='setTurn')O.setTeamTurn(a.v);else if(a.t==='reward')O.applyStreakReward(a.v);else if(a.t==='timeout')O.handleQuestionTimeout();}
-            function setInteractionLocked(lock){
-                document.body.classList.toggle('online-waiting-turn',!!lock);
-                ['quiz-input','quiz-submit-btn','quiz-reveal-btn'].forEach(id=>{const e=document.getElementById(id);if(e)e.disabled=!!lock;});
-                document.querySelectorAll('#view-hangman button, #view-play button').forEach(b=>{if(b.id==='sound-toggle'||b.closest('#optional-controls'))return;b.disabled=!!lock;});
-                const inp=document.getElementById('quiz-input');if(inp){inp.placeholder=lock?'WAITING FOR OPPONENT…':'TYPE YOUR ANSWER…';inp.classList.toggle('opacity-50',!!lock);inp.classList.toggle('cursor-not-allowed',!!lock);}
-            }
-            const O={};
-            ['handleHangmanGuess','nextHangman','giveHangmanHint','skipHangmanPuzzle','handleQuizSubmit','nextQuiz','giveQuizHint','revealQuizAnswer','skipQuizPuzzle','setTeamTurn','applyStreakReward','handleQuestionTimeout','endMatch'].forEach(n=>O[n]=window[n]);
-            function sendAct(a){
-                if(N.role==='client'&&N.started&&N.phase==='playing'&&N.ready&&N.team===state.activeTurn&&N.conn?.open){const id=++N.actionSeq;sendEnvelope({type:'act',from:N.clientId,id,a,sentAt:Date.now()});}
-            }
-            window.handleHangmanGuess=function(v){if(N.role==='client'&&!N.remote){sendAct({t:'hangmanGuess',v});return;}const r=O.handleHangmanGuess.apply(this,arguments);if(N.role==='host'&&!N.remote)sendState();return r;};
-            window.nextHangman=function(){if(N.role==='client'&&!N.remote){sendAct({t:'nextHangman'});return;}const r=O.nextHangman.apply(this,arguments);if(N.role==='host'&&!N.remote)sendState();return r;};
-            window.giveHangmanHint=function(){if(N.role==='client'&&!N.remote){sendAct({t:'hintHangman'});return;}const r=O.giveHangmanHint.apply(this,arguments);if(N.role==='host'&&!N.remote)sendState();return r;};
-            window.skipHangmanPuzzle=function(){if(N.role==='client'&&!N.remote){sendAct({t:'skipHangman'});return;}const r=O.skipHangmanPuzzle.apply(this,arguments);if(N.role==='host'&&!N.remote)sendState();return r;};
-            window.handleQuizSubmit=function(e){if(N.role==='client'&&!N.remote){e.preventDefault();sendAct({t:'quizSubmit',v:document.getElementById('quiz-input')?.value||''});return;}const before=state.questionAnswered;const r=O.handleQuizSubmit.apply(this,arguments);if(N.role==='host'&&!N.remote){if(!before&&!state.questionAnswered)N.quizResetVersion++;sendState();}return r;};
-            window.nextQuiz=function(){if(N.role==='client'&&!N.remote){sendAct({t:'nextQuiz'});return;}const r=O.nextQuiz.apply(this,arguments);if(N.role==='host'&&!N.remote)sendState();return r;};
-            window.giveQuizHint=function(){if(N.role==='client'&&!N.remote){sendAct({t:'hintQuiz'});return;}const r=O.giveQuizHint.apply(this,arguments);if(N.role==='host'&&!N.remote)sendState();return r;};
-            window.revealQuizAnswer=function(){if(N.role==='client'&&!N.remote){sendAct({t:'revealQuiz'});return;}const r=O.revealQuizAnswer.apply(this,arguments);if(N.role==='host'&&!N.remote)sendState();return r;};
-            window.skipQuizPuzzle=function(){if(N.role==='client'&&!N.remote){sendAct({t:'skipQuiz'});return;}const r=O.skipQuizPuzzle.apply(this,arguments);if(N.role==='host'&&!N.remote)sendState();return r;};
-            window.setTeamTurn=function(v){if(N.role==='client'&&!N.remote){sendAct({t:'setTurn',v});return;}const r=O.setTeamTurn.apply(this,arguments);if(N.role==='host'&&!N.remote)sendState();return r;};
-            window.applyStreakReward=function(v){if(N.role==='client'&&!N.remote){sendAct({t:'reward',v});return;}const r=O.applyStreakReward.apply(this,arguments);if(N.role==='host'&&!N.remote)sendState();return r;};
-            window.handleQuestionTimeout=function(){if(N.role==='client'&&!N.remote){sendAct({t:'timeout'});return;}const r=O.handleQuestionTimeout.apply(this,arguments);if(N.role==='host'&&!N.remote)sendState();return r;};
-            window.endMatch=function(){const r=O.endMatch.apply(this,arguments);if(N.role==='host'&&!N.remote){N.phase='ended';N.started=false;stopCurrentQuestionTimer();clearInterval(N.clock);sendState();}return r;};
-
-            function acceptRemoteAction(payload){
-                if(!payload?.from||!Number.isInteger(payload.id)||!valid(payload.a))return false;
-                const now=Date.now(),last=N.lastActionByPeer.get(payload.from);
-                if(last&&payload.id<=last.id)return false;
-                if(payload.sentAt&&Math.abs(now-payload.sentAt)>STALE_ACTION_MS)return false;
-                const p=N.players.get(payload.from);
-                if(!p||p.team!=='b'||state.activeTurn!=='b'||N.phase!=='playing')return false;
-                N.lastActionByPeer.set(payload.from,{id:payload.id,at:now});return true;
-            }
-            function attachConnection(conn,peerRole){
+            function requestRosterFromHost(){sendToConn(N.mesh.get(N.hostPeerId),{type:'roster-request',from:N.clientId});}
+            function attachMeshConnection(conn,peerId,isHostSide){
                 if(!conn)return;
                 conn.on('open',()=>{
-                    N.ready=true;N.connecting=false;N.reconnecting=false;N.reconnectAttempts=0;N.lastConnOpenAt=Date.now();
-                    if(peerRole==='client'){
-                        setHealth('ok','CONNECTED',false);
-                        status('Connected — synchronizing with Host…',true);startClientWatchdog();
-                        sendEnvelope({type:'join',from:N.clientId,team:'b',clientId:N.clientId,rejoin:!!N.started});
-                    }else{
-                        setHealth('ok','PLAYER CONNECTED',false);
-                        status('Player connected — waiting for Host to start',true);
-                    }
+                    N.mesh.set(peerId,conn);N.ready=true;N.connecting=false;N.reconnecting=false;N.reconnectAttempts=0;
+                    updateMeshHealth();
+                    if(N.role==='client'&&peerId===N.hostPeerId){setHealth('ok',`MESH CONNECTED · ${meshCount()} PEER`,false);status('Connected to room mesh — synchronizing…',true);sendToConn(conn,{type:'join',from:N.clientId,team:'b',clientId:N.clientId});}
+                    else if(N.role==='host'){setHealth('ok',`MESH ONLINE · ${meshCount()} PEER${meshCount()===1?'':'S'}`,false);status('Player connected to mesh.',true);}
                 });
-                conn.on('data',payload=>{
-                    if(N.destroying||!payload)return;
-                    if(N.role==='host'){
-                        if(payload.type==='join'){
-                            if(payload.from!==N.clientId){
-                                N.conn=conn;N.players.set(payload.from,{id:payload.from,role:'client',team:'b',joinedAt:Date.now()});
-                                renderPlayers();
-                                conn.send({type:'hello',to:payload.from,state:pack(),started:N.started,phase:N.phase,seq:N.seq,serverTs:Date.now()});
-                                sendState();
-                                status(N.started?'Player reconnected — state synchronized':'Player joined the room',true);
-                            }
-                        }else if(payload.type==='act'&&conn===N.conn&&N.started&&acceptRemoteAction(payload)){
-                            N.remote=true;try{run(payload.a);}finally{N.remote=false;}sendState();
-                        }
-                    }else if(N.role==='client'&&conn===N.conn){
-                        if(payload.type==='hello'&&payload.to===N.clientId){
-                            N.ready=true;N.started=!!payload.started;N.phase=payload.phase||payload.state?.phase||(N.started?'playing':'lobby');clearInterval(N.joinTimer);clearTimeout(N.stateTimer);apply(payload.state,payload.seq||0);setHealth('ok','CONNECTED',false);N.reconnecting=false;status(N.started?'Game synchronized':'Connected — waiting for Host to start',true);if(N.started)closeModal();
-                        }else if(payload.type==='state'&&(!payload.to||payload.to===N.clientId)){
-                            N.started=!!payload.started;N.phase=payload.phase||payload.state?.phase||(N.started?'playing':'lobby');apply(payload.state,payload.seq||0);if(N.started)closeModal();status(N.started?'Game synchronized':'Connected — waiting for Host to start',true);
-                        }
-                    }
-                });
+                conn.on('data',payload=>handleMeshPayload(payload,conn,peerId));
                 conn.on('close',()=>{
+                    N.mesh.delete(peerId);N.players.delete(peerId);N.pendingPeers.delete(peerId);renderPlayers();updateMeshHealth();
                     if(N.destroying)return;
-                    if(N.role==='host'){N.ready=!!N.peer&&!N.peer.destroyed;N.conn=null;N.players.clear();renderPlayers();setHealth('warn','WAITING FOR PLAYER',false);setInteractionLocked(false);status('Player disconnected. Waiting for them to re-join…',false);}
-                    else {N.ready=false;setInteractionLocked(true);setHealth('warn','RECONNECTING…',true);status('Connection to Host lost. Attempting automatic recovery…',false);scheduleReconnect('Connection closed — retrying…');}
+                    if(N.role==='client'&&peerId===N.hostPeerId){N.ready=false;setHealth('warn','MESH RECOVERING…',true);status('Host path lost. Rejoining the room mesh…',false);scheduleMeshReconnect();}
+                    else if(N.role==='host'){status('A peer left the mesh. Other peers remain connected.',false);}
                 });
-                conn.on('error',err=>{
-                    console.warn('[Emoji Rebus] Peer connection error',err);
-                    if(N.role==='client'){setHealth('bad','CONNECTION ERROR',true);scheduleReconnect('Connection error — retrying…');}
-                    else{setHealth('warn','PLAYER CONNECTION ERROR',false);status('Player connection error. The player can retry joining.',false);}
-                });
+                conn.on('error',()=>{N.mesh.delete(peerId);N.players.delete(peerId);renderPlayers();updateMeshHealth();if(N.role==='client'&&peerId===N.hostPeerId)scheduleMeshReconnect();});
+            }
+            function handleMeshPayload(payload,conn,fromPeer){
+                if(N.destroying||!payload)return;
+                if(payload.type==='join'){
+                    if(N.role!=='host')return;
+                    if(N.players.size>=MAX_MESH_PEERS-1&&!N.players.has(payload.from)){sendToConn(conn,{type:'room-full'});return;}
+                    N.players.set(payload.from,{id:payload.from,role:'client',team:'b',joinedAt:Date.now()});
+                    sendToConn(conn,{type:'hello',to:payload.from,leader:N.hostPeerId,state:pack(),started:N.started,phase:N.phase,seq:N.seq,serverTs:Date.now()});
+                    publishRoster();renderPlayers();sendStateTo(conn);setHealth('ok',`MESH ONLINE · ${meshCount()} PEER${meshCount()===1?'':'S'}`,false);status('Player joined the P2P mesh.',true);return;
+                }
+                if(payload.type==='roster-request'&&N.role==='host'){sendToConn(conn,rosterPayload());return;}
+                if(payload.type==='roster'){
+                    (payload.peers||[]).forEach(id=>{if(id!==N.peer?.id)connectPeer(id);});
+                    if(payload.leader)N.hostPeerId=payload.leader;
+                    updateMeshHealth();return;
+                }
+                if(payload.type==='hello'){
+                    if(N.role==='client'&&payload.to===N.clientId){N.hostPeerId=payload.leader||N.hostPeerId;N.started=!!payload.started;N.phase=payload.phase||'lobby';N.ready=true;apply(payload.state,payload.seq||0);status(N.started?'Game synchronized — mesh active':'Connected to room mesh — waiting for Host to start',true);closeModal();broadcastMesh(payload,fromPeer);}
+                    return;
+                }
+                if(payload.type==='state'){
+                    if(payload.to&&payload.to!==N.clientId)return;
+                    apply(payload.state,payload.seq||0);N.started=!!payload.started;N.phase=payload.phase||N.phase;if(N.role==='client'&&N.started)closeModal();broadcastMesh(payload,fromPeer);return;
+                }
+                if(payload.type==='act'){
+                    if(!rememberEvent(payload))return;
+                    broadcastMesh(payload,fromPeer);
+                    if(N.role==='host'&&N.started&&acceptRemoteAction(payload)){N.remote=true;try{run(payload.a);}finally{N.remote=false;}sendState();}
+                    return;
+                }
+                if(payload.type==='ping'){sendToConn(conn,{type:'pong',t:Date.now()});return;}
+            }
+        
+            function sendStateTo(conn){
+                if(N.role!=='host'||!conn?.open)return;N.seq++;sendToConn(conn,{type:'state',state:pack(),started:N.started,phase:N.phase,seq:N.seq,serverTs:Date.now()});
+            }
+            function sendState(){
+                if(N.role!=='host'||N.mesh.size===0)return;N.seq++;const payload={type:'state',state:pack(),started:N.started,phase:N.phase,seq:N.seq,serverTs:Date.now()};broadcastMesh(payload);N.lastSnapshotAt=Date.now();
+            }
+            function startHostTimers(){clearInterval(N.clock);N.clock=setInterval(()=>{if(N.started)sendState();},SYNC_INTERVAL);}
+            function startClientWatchdog(){clearInterval(N.clientWatchdog);N.clientWatchdog=setInterval(()=>{if(N.role!=='client'||N.phase!=='playing')return;const stale=N.lastSnapshotAt&&Date.now()-N.lastSnapshotAt>WATCHDOG_STALE;if(stale&&!N.reconnecting){setHealth('warn','MESH SYNC STALE',true);scheduleMeshReconnect();}},2000);}
+            function scheduleMeshReconnect(){if(N.destroying||N.role!=='client')return;clearTimeout(N.recoveryTimer);N.reconnectAttempts=Math.min(N.reconnectAttempts+1,8);const delay=Math.min(RECONNECT_MAX,RECONNECT_BASE*Math.pow(1.7,Math.max(0,N.reconnectAttempts-1)))+Math.floor(Math.random()*350);N.reconnecting=true;setHealth('warn','RECONNECTING…',true);status(`Rejoining mesh in ${Math.ceil(delay/1000)}s…`,false);N.recoveryTimer=setTimeout(()=>{if(N.destroying||N.role!=='client')return;N.mesh.forEach((c,id)=>{if(id===N.hostPeerId){try{c.close();}catch{}}});N.mesh.delete(N.hostPeerId);connectPeer(N.hostPeerId);},delay);}
+            function manualReconnect(){if(N.role!=='client')return;clearTimeout(N.recoveryTimer);N.reconnectAttempts=0;N.reconnecting=false;setHealth('warn','RECONNECTING…',true);status('Rejoining the P2P mesh…',false);try{N.mesh.get(N.hostPeerId)?.close();}catch{}N.mesh.delete(N.hostPeerId);connectPeer(N.hostPeerId);}
+        
+            function renderPlayers(){const e=document.getElementById('or-players');if(!e)return;let b=0;N.players.forEach(p=>{if(p.team==='b')b++;});e.innerHTML=`🔵 Blue: 1 &nbsp; 🔴 Red: ${b}`;const start=document.getElementById('or-start'),note=document.getElementById('or-wait-note');if(start&&N.role==='host'){const ready=b>0;start.disabled=!ready;start.textContent=ready?'START GAME FOR EVERYONE':'WAITING FOR PLAYER…';start.className=ready?'solid-btn bg-emerald-400 text-slate-900 w-full py-2 mt-3 font-black':'solid-btn bg-slate-300 text-slate-500 w-full py-2 mt-3 font-black cursor-not-allowed';if(note)note.textContent=ready?'Player joined the mesh — Host can start the match.':'Waiting for a player to join the mesh…';}}
+            function valid(a){return !!(a&&ACTIONS.includes(a.t));}
+            function run(a){if(a.t==='hangmanGuess')O.handleHangmanGuess(a.v);else if(a.t==='nextHangman')O.nextHangman();else if(a.t==='hintHangman')O.giveHangmanHint();else if(a.t==='skipHangman')O.skipHangmanPuzzle();else if(a.t==='quizSubmit'){const q=document.getElementById('quiz-input');q.value=a.v||'';O.handleQuizSubmit({preventDefault(){},target:q});}else if(a.t==='nextQuiz')O.nextQuiz();else if(a.t==='hintQuiz')O.giveQuizHint();else if(a.t==='revealQuiz')O.revealQuizAnswer();else if(a.t==='skipQuiz')O.skipQuizPuzzle();else if(a.t==='setTurn')O.setTeamTurn(a.v);else if(a.t==='reward')O.applyStreakReward(a.v);else if(a.t==='timeout')O.handleQuestionTimeout();}
+            function setInteractionLocked(lock){document.body.classList.toggle('online-waiting-turn',!!lock);['quiz-input','quiz-submit-btn','quiz-reveal-btn'].forEach(id=>{const e=document.getElementById(id);if(e)e.disabled=!!lock;});document.querySelectorAll('#view-hangman button, #view-play button').forEach(b=>{if(b.id==='sound-toggle'||b.closest('#optional-controls'))return;b.disabled=!!lock;});const inp=document.getElementById('quiz-input');if(inp){inp.placeholder=lock?'WAITING FOR OPPONENT…':'TYPE YOUR ANSWER…';inp.classList.toggle('opacity-50',!!lock);inp.classList.toggle('cursor-not-allowed',!!lock);}}
+            const O={};['handleHangmanGuess','nextHangman','giveHangmanHint','skipHangmanPuzzle','handleQuizSubmit','nextQuiz','giveQuizHint','revealQuizAnswer','skipQuizPuzzle','setTeamTurn','applyStreakReward','handleQuestionTimeout','endMatch'].forEach(n=>O[n]=window[n]);
+            function sendAct(a){if(N.started&&N.phase==='playing'&&N.ready&&N.team===state.activeTurn){const id=++N.actionSeq;const payload={type:'act',from:N.clientId,id,a,sentAt:Date.now()};rememberEvent(payload);broadcastMesh(payload);if(N.role==='host'){N.remote=true;try{run(a);}finally{N.remote=false;}sendState();}}}
+            window.handleHangmanGuess=function(v){if((N.role==='client'||N.role==='host')&&!N.remote&&N.phase==='playing'&&N.team===state.activeTurn){sendAct({t:'hangmanGuess',v});return;}const r=O.handleHangmanGuess.apply(this,arguments);if(N.role==='host'&&!N.remote)sendState();return r;};
+            window.nextHangman=function(){if(!N.remote&&N.phase==='playing'&&(N.role==='client'||N.role==='host')&&N.team===state.activeTurn){sendAct({t:'nextHangman'});return;}const r=O.nextHangman.apply(this,arguments);if(N.role==='host'&&!N.remote)sendState();return r;};
+            window.giveHangmanHint=function(){if(!N.remote&&N.phase==='playing'&&(N.role==='client'||N.role==='host')){sendAct({t:'hintHangman'});return;}const r=O.giveHangmanHint.apply(this,arguments);if(N.role==='host'&&!N.remote)sendState();return r;};
+            window.skipHangmanPuzzle=function(){if(!N.remote&&N.phase==='playing'&&(N.role==='client'||N.role==='host')&&N.team===state.activeTurn){sendAct({t:'skipHangman'});return;}const r=O.skipHangmanPuzzle.apply(this,arguments);if(N.role==='host'&&!N.remote)sendState();return r;};
+            window.handleQuizSubmit=function(e){if((N.role==='client'||N.role==='host')&&!N.remote&&N.phase==='playing'&&N.team===state.activeTurn){e.preventDefault();sendAct({t:'quizSubmit',v:document.getElementById('quiz-input')?.value||''});return;}const before=state.questionAnswered;const r=O.handleQuizSubmit.apply(this,arguments);if(N.role==='host'&&!N.remote){if(!before&&!state.questionAnswered)N.quizResetVersion++;sendState();}return r;};
+            window.nextQuiz=function(){if(!N.remote&&N.phase==='playing'&&(N.role==='client'||N.role==='host')&&N.team===state.activeTurn){sendAct({t:'nextQuiz'});return;}const r=O.nextQuiz.apply(this,arguments);if(N.role==='host'&&!N.remote)sendState();return r;};
+            window.giveQuizHint=function(){if(!N.remote&&N.phase==='playing'&&(N.role==='client'||N.role==='host')){sendAct({t:'hintQuiz'});return;}const r=O.giveQuizHint.apply(this,arguments);if(N.role==='host'&&!N.remote)sendState();return r;};
+            window.revealQuizAnswer=function(){if(!N.remote&&N.phase==='playing'&&(N.role==='client'||N.role==='host')){sendAct({t:'revealQuiz'});return;}const r=O.revealQuizAnswer.apply(this,arguments);if(N.role==='host'&&!N.remote)sendState();return r;};
+            window.skipQuizPuzzle=function(){if(!N.remote&&N.phase==='playing'&&(N.role==='client'||N.role==='host')&&N.team===state.activeTurn){sendAct({t:'skipQuiz'});return;}const r=O.skipQuizPuzzle.apply(this,arguments);if(N.role==='host'&&!N.remote)sendState();return r;};
+            window.setTeamTurn=function(v){if(!N.remote&&N.phase==='playing'&&(N.role==='client'||N.role==='host')){sendAct({t:'setTurn',v});return;}const r=O.setTeamTurn.apply(this,arguments);if(N.role==='host'&&!N.remote)sendState();return r;};
+            window.applyStreakReward=function(v){if(!N.remote&&N.phase==='playing'&&(N.role==='client'||N.role==='host')){sendAct({t:'reward',v});return;}const r=O.applyStreakReward.apply(this,arguments);if(N.role==='host'&&!N.remote)sendState();return r;};
+            window.handleQuestionTimeout=function(){if(!N.remote&&N.phase==='playing'&&(N.role==='client'||N.role==='host')){sendAct({t:'timeout'});return;}const r=O.handleQuestionTimeout.apply(this,arguments);if(N.role==='host'&&!N.remote)sendState();return r;};
+            window.endMatch=function(){const r=O.endMatch.apply(this,arguments);if(N.role==='host'&&!N.remote){N.phase='ended';N.started=false;stopCurrentQuestionTimer();clearInterval(N.clock);sendState();}return r;};
+        
+            function acceptRemoteAction(payload){
+                if(!payload?.from||!Number.isInteger(payload.id)||!valid(payload.a))return false;const p=N.players.get(payload.from);if(!p||p.team!=='b'||state.activeTurn!=='b'||N.phase!=='playing')return false;return true;
             }
             function createHostPeer(){
-                const gen=N.generation,code=N.code;
-                N.hostPeerId=peerIdForCode(code);N.connecting=true;
-                try{N.peer=new Peer(N.hostPeerId,{debug:0,config:{iceServers:[{urls:'stun:stun.l.google.com:19302'}]}});}catch(e){status('Could not start online room.',false);return;}
-                N.peer.on('open',id=>{if(gen!==N.generation)return;N.ready=true;N.connecting=false;N.reconnectAttempts=0;setHealth('ok','ROOM ONLINE',false);startHostTimers();renderPlayers();status('Room ready — waiting for a player',true);});
-                N.peer.on('connection',conn=>{if(gen!==N.generation)return;if(N.conn&&N.conn.open&&N.conn!==conn){try{conn.close();}catch{}status('Only one Red Team player is supported in this room.',false);return;}N.conn=conn;attachConnection(conn,'host');});
-                N.peer.on('disconnected',()=>{if(gen!==N.generation)return;N.ready=false;setHealth('warn','SIGNALING RECONNECTING…',true);status('Online signaling connection lost — reconnecting…',false);try{N.peer.reconnect();}catch{}});
-                N.peer.on('error',err=>{
-                    if(gen!==N.generation)return;
-                    console.error('[Emoji Rebus] Peer error:',err);
-                    if(err.type==='unavailable-id'){setHealth('bad','ROOM ID BUSY',false);status('Room code is already in use. Please close this lobby and create a new room.',false);}else {setHealth('bad','ONLINE ERROR',N.role==='client');status(`Online error: ${err.type||'connection failed'}`,false);}
-                    if(err.type==='peer-unavailable'||err.type==='network'){N.ready=false;if(N.role==='client')scheduleReconnect('Host not reachable — retrying…');}
-                });
-            }
-            function create(){
-                if(!readyForOnline())return;
-                cleanup();N.role='host';N.team='a';N.code=makeRoomCode();N.started=false;N.phase='lobby';N.ready=false;N.clientId=clientId();N.generation++;
-                setInteractionLocked(true);showHostLobby();setHealth('warn','CREATING ROOM…',true);status('Creating room…',true);createHostPeer();
-            }
-            function connectToHost(isRecovery=false){
-                if(N.role!=='client'||!N.peer||N.peer.destroyed)return;
-                if(N.conn?.open&&!isRecovery){N.reconnecting=false;setHealth('ok','CONNECTED',false);return;}
-                if(isRecovery&&N.conn?.open){try{N.conn.close();}catch{};N.conn=null;}
-                clearTimeout(N.recoveryTimer);
-                try{
-                    N.connecting=true;
-                    setHealth('warn','CONNECTING…',true);
-                    const conn=N.peer.connect(N.hostPeerId,{reliable:true,serialization:'json',metadata:{clientId:N.clientId}});
-                    N.conn=conn;attachConnection(conn,'client');
-                    if(isRecovery)status('Trying to restore the Host connection…',true);
-                }catch{
-                    scheduleReconnect('Could not connect to the Host yet. Retrying…');
-                }
+                const gen=N.generation;N.hostPeerId=peerIdForCode(N.code);N.connecting=true;
+                try{N.peer=new Peer(N.hostPeerId,{debug:0});}catch{status('Could not start online room.',false);setHealth('bad','ONLINE ERROR',false);return;}
+                N.peer.on('open',id=>{if(gen!==N.generation)return;N.ready=true;N.connecting=false;setHealth('ok','MESH ONLINE · 0 PEERS',false);startHostTimers();renderPlayers();status('Room ready — waiting for players to join the mesh',true);});
+                N.peer.on('connection',conn=>{if(gen!==N.generation)return;const pid=conn.peer;N.mesh.set(pid,conn);attachMeshConnection(conn,pid,true);});
+                N.peer.on('disconnected',()=>{if(gen!==N.generation)return;N.ready=false;setHealth('warn','SIGNALING RECOVERING…',true);try{N.peer.reconnect();}catch{}});
+                N.peer.on('error',err=>{if(gen!==N.generation)return;console.warn('[Emoji Rebus Mesh] Host peer error',err);if(err.type==='unavailable-id'){setHealth('bad','ROOM ID BUSY',false);status('Room code is already in use. Create a new room.',false);}else setHealth('bad','ONLINE ERROR',false);});
             }
             function createClientPeer(){
                 const gen=N.generation;N.connecting=true;
-                try{N.peer=new Peer(undefined,{debug:0,config:{iceServers:[{urls:'stun:stun.l.google.com:19302'}]}});}catch{status('Could not start online connection.',false);return;}
-                N.peer.on('open',()=>{if(gen!==N.generation)return;N.ready=false;N.connecting=false;setHealth('warn','CONNECTING TO HOST…',true);connectToHost();clearInterval(N.joinTimer);N.joinTimer=setInterval(()=>{if(N.role==='client'&&!N.conn?.open)connectToHost(true);},JOIN_HEARTBEAT);clearTimeout(N.stateTimer);N.stateTimer=setTimeout(()=>{if(!N.started&&gen===N.generation&&!N.conn?.open){setHealth('bad','HOST NOT REACHABLE',true);status('Could not reach the Host. Automatic recovery is still running — you can retry now.',false);}},MAX_JOIN_WAIT);});
-                N.peer.on('disconnected',()=>{if(gen!==N.generation)return;setHealth('warn','SIGNALING RECONNECTING…',true);try{N.peer.reconnect();}catch{scheduleReconnect('Signaling connection lost — retrying…');}});
-                N.peer.on('error',err=>{if(gen!==N.generation)return;console.warn('[Emoji Rebus] Peer client error:',err);if(err.type==='peer-unavailable'){setHealth('warn','HOST NOT FOUND',true);scheduleReconnect('Room/Host not reachable — retrying…');}else{setHealth('bad','ONLINE ERROR',true);scheduleReconnect(`Online error: ${err.type||'connection failed'} — retrying…`);}});
+                try{N.peer=new Peer(undefined,{debug:0});}catch{status('Could not start online connection.',false);return;}
+                N.peer.on('open',()=>{if(gen!==N.generation)return;N.connecting=false;setHealth('warn','JOINING MESH…',true);connectPeer(N.hostPeerId);clearTimeout(N.stateTimer);N.stateTimer=setTimeout(()=>{if(gen===N.generation&&!N.mesh.has(N.hostPeerId)){setHealth('bad','HOST NOT REACHABLE',true);status('Could not reach the room bootstrap peer. You can retry.',false);}},MAX_JOIN_WAIT);});
+                N.peer.on('disconnected',()=>{if(gen!==N.generation)return;setHealth('warn','SIGNALING RECOVERING…',true);try{N.peer.reconnect();}catch{scheduleMeshReconnect();}});
+                N.peer.on('error',err=>{if(gen!==N.generation)return;console.warn('[Emoji Rebus Mesh] Client peer error',err);setHealth('bad','ONLINE ERROR',true);scheduleMeshReconnect();});
+                startClientWatchdog();
+            }
+            function create(){
+                if(!readyForOnline())return;cleanup();N.role='host';N.team='a';N.code=makeRoomCode();N.started=false;N.phase='lobby';N.ready=false;N.clientId=clientId();N.generation++;setInteractionLocked(true);showHostLobby();setHealth('warn','CREATING ROOM…',true);status('Creating P2P mesh room…',true);createHostPeer();
             }
             function join(code){
-                if(!readyForOnline())return;
-                cleanup();N.role='client';N.team='b';N.code=String(code||'').trim().toUpperCase();N.hostPeerId=peerIdForCode(N.code);N.started=false;N.phase='lobby';N.ready=false;N.clientId=clientId();N.generation++;
-                setInteractionLocked(true);showLobby('Joining room',`<div class="bg-slate-100 border-2 border-slate-900 rounded-xl p-3 font-black">ROOM ${escRoom(N.code)}<br><span id="or-join-detail" class="text-xs text-slate-500">Connecting securely to Host…</span></div><div class="text-[10px] text-slate-500 font-bold mt-2">You are 🔴 Red Team. The Host controls difficulty and starts the match.</div>`);status('Connecting to Host…',true);createClientPeer();
+                if(!readyForOnline())return;cleanup();N.role='client';N.team='b';N.code=String(code||'').trim().toUpperCase();N.hostPeerId=peerIdForCode(N.code);N.started=false;N.phase='lobby';N.ready=false;N.clientId=clientId();N.generation++;setInteractionLocked(true);showLobby('Joining room',`<div class="bg-slate-100 border-2 border-slate-900 rounded-xl p-3 font-black">ROOM ${escRoom(N.code)}<br><span id="or-join-detail" class="text-xs text-slate-500">Joining P2P mesh…</span></div><div class="text-[10px] text-slate-500 font-bold mt-2">You are 🔴 Red Team. The Host controls difficulty and starts the match.</div>`);setHealth('warn','JOINING MESH…',true);status('Connecting to room bootstrap…',true);createClientPeer();
             }
             function inviteLink(){try{const url=new URL(location.href);url.searchParams.set('room',N.code);return url.toString();}catch{return `${location.origin}${location.pathname}?room=${encodeURIComponent(N.code)}`;}}
             async function copyInviteLink(){const link=inviteLink();try{await navigator.clipboard.writeText(link);status('Invite link copied — send it to your friend.',true);}catch{const ta=document.createElement('textarea');ta.value=link;document.body.appendChild(ta);ta.select();try{document.execCommand('copy');status('Invite link copied — send it to your friend.',true);}catch{status(link,true);}ta.remove();}}
             function showHostLobby(){
-                showLobby('Host Lobby',`<div class="bg-slate-100 border-2 border-slate-900 rounded-xl p-3"><div class="text-[10px] font-black uppercase">ROOM CODE</div><div class="text-4xl sm:text-5xl font-black tracking-[.28em] mt-1">${escRoom(N.code)}</div><button id="or-copy-link" class="solid-btn bg-yellow-400 text-slate-900 w-full py-2 mt-3 font-black">📋 COPY INVITE LINK</button><div class="text-[10px] font-bold text-slate-500 mt-2">Send the link or this 6-character code to your friend.</div><div class="text-xs font-black mt-3">🎯 ${escRoom(state.difficulty)} · ⏱️ ${state.baseTimerDuration}s / question</div><div id="or-players" class="mt-2">🔵 Blue: 1 &nbsp; 🔴 Red: 0</div><div id="or-wait-note" class="text-[10px] font-bold text-amber-700 mt-2">Waiting for a player to join…</div><div class="text-[10px] font-bold text-slate-500 mt-1">Host = 🔵 Blue. Join = 🔴 Red. The match timer starts only after Host presses Start.</div><button id="or-start" disabled class="solid-btn bg-slate-300 text-slate-500 w-full py-2 mt-3 font-black cursor-not-allowed">WAITING FOR PLAYER…</button></div>`);
-                document.getElementById('or-copy-link').onclick=copyInviteLink;document.getElementById('or-start').onclick=hostStart;status('Creating room…',true);renderPlayers();
+                showLobby('Host Lobby',`<div class="bg-slate-100 border-2 border-slate-900 rounded-xl p-3"><div class="text-[10px] font-black uppercase">ROOM CODE</div><div class="text-4xl sm:text-5xl font-black tracking-[.28em] mt-1">${escRoom(N.code)}</div><button id="or-copy-link" class="solid-btn bg-yellow-400 text-slate-900 w-full py-2 mt-3 font-black">📋 COPY INVITE LINK</button><div class="text-[10px] font-bold text-slate-500 mt-2">P2P mesh room — send the link or this code to your friend.</div><div class="text-xs font-black mt-3">🎯 ${escRoom(state.difficulty)} · ⏱️ ${state.baseTimerDuration}s / question</div><div id="or-players" class="mt-2">🔵 Blue: 1 &nbsp; 🔴 Red: 0</div><div id="or-wait-note" class="text-[10px] font-bold text-amber-700 mt-2">Waiting for a player to join the mesh…</div><div class="text-[10px] font-bold text-slate-500 mt-1">Game events travel peer-to-peer. Host remains the current game-state authority.</div><button id="or-start" disabled class="solid-btn bg-slate-300 text-slate-500 w-full py-2 mt-3 font-black cursor-not-allowed">WAITING FOR PLAYER…</button></div>`);
+                document.getElementById('or-copy-link').onclick=copyInviteLink;document.getElementById('or-start').onclick=hostStart;renderPlayers();
             }
             function hostStart(){
-                if(N.role!=='host'||!N.ready||!N.conn?.open){status('Room is still connecting. Please wait for your friend to join.',false);return;}
-                if(N.players.size<1){status('At least one player must join before the game can start.',false);return;}
-                N.started=true;N.phase='playing';N.lastActionByPeer.clear();
-                document.getElementById('intro-overlay').classList.add('hidden');applyPlayerModeUI();startActivity(tempIntroActivity);setInteractionLocked(N.team!==state.activeTurn);sendState();closeModal();
+                if(N.role!=='host'||!N.ready){status('Room is still creating. Please wait.',false);return;}if(N.players.size<1){status('At least one player must join before the game can start.',false);return;}
+                N.started=true;N.phase='playing';N.lastSeenEvents.clear();N.actionSeq=0;document.getElementById('intro-overlay').classList.add('hidden');applyPlayerModeUI();startActivity(tempIntroActivity);setInteractionLocked(N.team!==state.activeTurn);sendState();closeModal();setHealth('ok',`MESH ONLINE · ${meshCount()} PEER${meshCount()===1?'':'S'}`,false);publishRoster();
             }
             window.onlineRoomStart=function(mode,code){ensureUI();if(mode==='host')create();else if(mode==='join')join(code);else{cleanup();setInteractionLocked(false);}};
             function applyInviteRoomFromUrl(){try{const code=new URLSearchParams(location.search).get('room');if(!/^[A-Za-z0-9]{6}$/.test(code||''))return;tempIntroMode='team';tempOnlineMode='join';tempOnlineTeam='b';const teamBtn=document.getElementById('intro-opt-team');if(teamBtn){document.querySelectorAll('.intro-option').forEach(el=>el.classList.remove('selected'));teamBtn.classList.add('selected');}const online=document.getElementById('intro-online-options');if(online)online.classList.remove('hidden');selectOnlineMode('join');const input=document.getElementById('intro-join-code');if(input)input.value=code.toUpperCase();setTimeout(()=>{if(window.onlineRoomStart)window.onlineRoomStart('join',code.toUpperCase());},250);}catch{}}
-            window.addEventListener('beforeunload',()=>{cleanup();});
+            window.addEventListener('beforeunload',()=>cleanup());
             setTimeout(applyInviteRoomFromUrl,0);
         })();
-    </script>
+            </script>
 </body>
 </html>
