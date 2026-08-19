@@ -1245,9 +1245,12 @@
         }
 
         function selectOnlineTeam(team) {
-            tempOnlineTeam = team === 'b' ? 'b' : 'a';
+            // Online rooms assign teams automatically: Host = Blue, Join = Red.
+            // Keep this function only for compatibility with the existing UI wiring.
+            tempOnlineTeam = tempOnlineMode === 'join' ? 'b' : 'a';
             document.querySelectorAll('.online-team-option').forEach(el => el.classList.remove('selected'));
-            document.getElementById(`intro-online-team-${tempOnlineTeam}`).classList.add('selected');
+            const selected = document.getElementById(`intro-online-team-${tempOnlineTeam}`);
+            if (selected) selected.classList.add('selected');
             playSFX('click');
         }
 
@@ -1260,14 +1263,18 @@
             const teamWrap = document.getElementById('intro-online-team-wrap');
             const help = document.getElementById('intro-online-help');
             joinWrap.classList.toggle('hidden', mode !== 'join');
-            teamWrap.classList.toggle('hidden', mode === 'local');
+            // Online team assignment is automatic: Host is always Blue, Join is always Red.
+            teamWrap.classList.add('hidden');
             if (mode === 'host') {
-                help.textContent = 'Host chooses difficulty, creates the room, then waits for at least one player to join before starting.';
+                tempOnlineTeam = 'a';
+                help.textContent = 'Host = 🔵 Blue Team. Choose difficulty, create the room, wait for a player to join, then start the match.';
                 document.getElementById('intro-next-btn-1').textContent = 'PROCEED TO DIFFICULTY →';
             } else if (mode === 'join') {
-                help.textContent = 'Join only: enter the Host room code. Difficulty and game start are controlled by the Host.';
+                tempOnlineTeam = 'b';
+                help.textContent = 'Join = 🔴 Red Team. Enter the Host room code. Difficulty and game start are controlled by the Host.';
                 document.getElementById('intro-next-btn-1').textContent = 'JOIN ROOM →';
             } else {
+                tempOnlineTeam = 'a';
                 help.textContent = 'Continue Here keeps the existing two-team / same-device multiplayer behavior.';
                 document.getElementById('intro-next-btn-1').textContent = 'PROCEED TO DIFFICULTY →';
             }
@@ -1375,12 +1382,29 @@
             resetQuestionPool();
             pickNextPuzzle();
 
-            const onlineJoin = state.mode === 'team' && tempOnlineMode === 'join';
-            if (!onlineJoin) {
+            const onlineMode = state.mode === 'team' ? tempOnlineMode : 'local';
+            const onlineJoin = onlineMode === 'join';
+            const onlineHost = onlineMode === 'host';
+
+            if (onlineMode === 'local') {
                 document.getElementById('intro-overlay').classList.add('hidden');
                 applyPlayerModeUI();
                 startActivity(tempIntroActivity);
+            } else {
+                // Online games must remain completely paused while the lobby is waiting.
+                // Do not call startActivity() here: it starts the global/question timers.
+                stopCurrentQuestionTimer();
+                clearInterval(state.globalTimerInterval);
+                state.globalTimerInterval = null;
+                state.questionTimerInterval = null;
+                state.globalTimeLeft = state.matchDurationMinutes * 60;
+                state.questionTimeLeft = state.baseTimerDuration;
+                state.activeTab = tempIntroActivity;
+                applyPlayerModeUI();
+                updateGlobalTimerDisplay();
+                updateQuestionTimerDisplay();
             }
+
             if (state.mode === 'team' && tempOnlineMode !== 'local' && window.onlineRoomStart) {
                 window.onlineRoomStart(tempOnlineMode, window.__pendingOnlineRoomCode || '');
             }
@@ -2310,11 +2334,18 @@
                 {urls:'stun:stun.l.google.com:19302'},
                 {urls:'stun:stun1.l.google.com:19302'}
             ]};
-            const SYNC_INTERVAL=500, CONNECT_TIMEOUT=15000, MAX_JOIN_RETRIES=2;
-            // PeerJS Cloud: let the client use its current official cloud defaults.
-            // Explicitly forcing host/path/SSL here made the local-file test brittle.
-            // GitHub Pages (HTTPS) will use the secure transport automatically.
-            const PEER_CONFIG={debug:1,config:ICE};
+            const SYNC_INTERVAL=500, CONNECT_TIMEOUT=10000, MAX_JOIN_RETRIES=3;
+            // GitHub Pages is HTTPS, so use PeerJS Cloud explicitly over secure WebSocket.
+            // This avoids browser-dependent default transport detection during JOIN.
+            const PEER_CONFIG={
+                host:'0.peerjs.com',
+                port:443,
+                path:'/',
+                secure:true,
+                debug:2,
+                pingInterval:5000,
+                config:ICE
+            };
             function makePeer(id){
                 // PeerJS chooses the correct Cloud transport from the current page context.
                 // For GitHub Pages this is HTTPS/WSS. For local file:// testing we show a
@@ -2325,7 +2356,12 @@
             function esc(x){return String(x).replace(/[&<>'"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;',"'":'&#39;','"':'&quot;'}[c]));}
             function roomCode(){const c='ABCDEFGHJKLMNPQRSTUVWXYZ23456789';return Array.from({length:6},()=>c[Math.floor(Math.random()*c.length)]).join('');}
             function modal(){return document.getElementById('online-room-modal');}
-            function status(x,ok){const e=document.getElementById('or-status');if(e){e.textContent=x;e.className=`text-xs font-bold my-3 ${ok?'text-emerald-600':'text-slate-500'}`;}}
+            function status(x,ok){
+                const e=document.getElementById('or-status');
+                if(e){e.textContent=x;e.className=`text-xs font-bold my-3 ${ok?'text-emerald-600':'text-red-600'}`;}
+                const d=document.getElementById('or-join-detail');
+                if(d)d.textContent=x;
+            }
             function ensureUI(){
                 if(document.getElementById('online-room-modal'))return;
                 const m=document.createElement('div');m.id='online-room-modal';m.className='hidden fixed inset-0 z-[200] flex items-center justify-center bg-slate-900/85 p-4';
@@ -2368,7 +2404,7 @@
                 if(typeof Peer==='undefined'){alert('Online networking library failed to load. Please refresh the page.');return;}
                 if(!isOnlinePage()){
                     showLobby('Open the game from GitHub Pages',`<div class="bg-amber-50 border-2 border-amber-400 rounded p-3 text-left text-xs font-bold">Online rooms need a normal web origin (HTTPS/HTTP). Please open the game through GitHub Pages before creating an online room.</div><div class="text-[10px] text-slate-500 font-bold mt-2">The game itself still works locally; only Online Room needs the web-hosted page.</div><button id="or-copy-note" class="solid-btn bg-yellow-400 text-slate-900 w-full py-2 mt-3 font-black">GOT IT</button>`);document.getElementById('or-copy-note').onclick=()=>modal().classList.add('hidden');setInteractionLocked(false);return;}
-                cleanup();N.role='host';N.team=window.__pendingOnlineTeam==='b'?'b':'a';N.code=roomCode();N.started=false;N.ready=false;N.seq=0;N.lastAppliedSeq=0;N.quizResetVersion=0;N.lastQuizResetVersion=0;
+                cleanup();N.role='host';N.team='a';N.code=roomCode();N.started=false;N.ready=false;N.seq=0;N.lastAppliedSeq=0;N.quizResetVersion=0;N.lastQuizResetVersion=0;
                 setInteractionLocked(true);status('Starting room…',true);
                 N.peer=makePeer('rebus-'+N.code);
                 N.peer.on('open',()=>{N.ready=true;N.onlineReady=true;showHostLobby();startHostTimers();});
@@ -2386,67 +2422,121 @@
                 if(!isOnlinePage()){
                     showLobby('Open the game from GitHub Pages',`<div class="bg-amber-50 border-2 border-amber-400 rounded p-3 text-left text-xs font-bold">Online rooms need a normal web origin (HTTPS/HTTP). This file is currently opened directly with <code>file://</code>, which gives the browser an opaque origin and can prevent the signaling connection from completing.</div><div class="text-[10px] text-slate-500 font-bold mt-2">Upload this same HTML file to GitHub Pages, open the HTTPS page in both browsers, then use the same room code.</div><button id="or-copy-note" class="solid-btn bg-yellow-400 text-slate-900 w-full py-2 mt-3 font-black">GOT IT</button>`);document.getElementById('or-copy-note').onclick=()=>modal().classList.add('hidden');setInteractionLocked(false);return;
                 }
-                cleanup();N.role='client';N.team=window.__pendingOnlineTeam==='b'?'b':'a';N.code=code;N.ready=false;N.seq=0;N.lastAppliedSeq=0;N.quizResetVersion=0;N.lastQuizResetVersion=0;N.joinRetries=0;
+                cleanup();N.role='client';N.team='b';N.code=code;N.ready=false;N.seq=0;N.lastAppliedSeq=0;N.quizResetVersion=0;N.lastQuizResetVersion=0;N.joinRetries=0;
                 setInteractionLocked(true);
                 showLobby('Joining room',`<div class="bg-slate-100 border-2 border-slate-900 rounded p-3 font-black">ROOM ${esc(code)}<br><span id="or-join-detail" class="text-xs text-slate-500">Connecting to signaling server…</span></div><div class="text-[10px] text-slate-500 font-bold mt-2">The game will not start until the Host starts it. If connection fails, this client will retry automatically.</div>`);
                 connectToHost();
             }
             function connectToHost(){
                 N.joinRetries++;
-                if(N.joinRetries>MAX_JOIN_RETRIES+1){status('Unable to connect to the Host. Check the room code, Host connection, and GitHub Pages HTTPS, then try again.',false);setInteractionLocked(true);return;}
+                if(N.joinRetries>MAX_JOIN_RETRIES){
+                    status('Unable to connect to the Host after several attempts. Check that the Host is still in the lobby and the room code is correct.',false);
+                    setInteractionLocked(true);
+                    return;
+                }
+
                 const gen=++N.connectGeneration;
                 try{N.peer&&N.peer.destroy();}catch{}
                 try{N.conns.forEach(c=>{try{c.close()}catch{}});}catch{}
                 N.conns.clear();
                 clearConnectTimer();
+
+                status(`Connecting to PeerJS… (${N.joinRetries}/${MAX_JOIN_RETRIES})`,true);
                 N.peer=makePeer();
                 let connectionStarted=false;
                 let retryScheduled=false;
+                let peerOpened=false;
                 const target='rebus-'+N.code;
+
+                const scheduleRetry=(message,delay=700)=>{
+                    status(message,false);
+                    if(retryScheduled)return;
+                    retryScheduled=true;
+                    setTimeout(()=>{
+                        if(gen===N.connectGeneration && N.role==='client' && !N.started)connectToHost();
+                    },delay);
+                };
+
                 const startConnection=()=>{
                     if(connectionStarted||gen!==N.connectGeneration||N.role!=='client'||!N.peer||N.peer.destroyed)return;
+                    if(!peerOpened){
+                        status('Connected to signaling server — contacting Host…',true);
+                        return;
+                    }
                     connectionStarted=true;
-                    status(`Contacting Host… (${N.joinRetries}/${MAX_JOIN_RETRIES+1})`,true);
-                    const c=N.peer.connect(target,{reliable:true,serialization:'json',metadata:{team:N.team}});
-                    setupClient(c);startConnectTimer(c);
+                    status(`Contacting Host… (${N.joinRetries}/${MAX_JOIN_RETRIES})`,true);
+                    let c;
+                    try{
+                        c=N.peer.connect(target,{
+                            reliable:true,
+                            serialization:'json',
+                            metadata:{team:N.team},
+                            label:'emoji-rebus-room'
+                        });
+                    }catch(err){
+                        connectionStarted=false;
+                        scheduleRetry('Could not create Host connection — retrying…',700);
+                        return;
+                    }
+                    setupClient(c);
+                    startConnectTimer(c);
                 };
-                // PeerJS can queue an outbound connection before the signaling
-                // socket emits `open`. Starting immediately avoids an unnecessary
-                // wait on browsers/networks where the signaling open event is slow.
-                startConnection();
+
                 N.peer.on('open',()=>{
                     if(gen!==N.connectGeneration||N.role!=='client')return;
-                    status(`Signaling connected — contacting Host… (${N.joinRetries}/${MAX_JOIN_RETRIES+1})`,true);
+                    peerOpened=true;
+                    status('Signaling server connected — contacting Host…',true);
                     startConnection();
                 });
+
                 N.peer.on('disconnected',()=>{
                     if(gen!==N.connectGeneration||N.role!=='client')return;
-                    status('Signaling disconnected — retrying…',false);
-                    if(!retryScheduled){retryScheduled=true;setTimeout(()=>{if(gen===N.connectGeneration&&N.role==='client'&&!N.started)connectToHost();},700);}
+                    scheduleRetry('Signaling server disconnected — reconnecting…',700);
                 });
+
                 N.peer.on('error',e=>{
                     if(gen!==N.connectGeneration||N.role!=='client')return;
                     const t=e&&e.type||'unknown';
-                    // peer-unavailable is expected when the Host is still coming
-                    // online; retry without creating a second Peer at the same time.
                     if(t==='peer-unavailable'){
-                        status('Host not reachable yet — retrying…',false);
-                        if(!retryScheduled){retryScheduled=true;setTimeout(()=>{if(gen===N.connectGeneration&&N.role==='client'&&!N.started)connectToHost();},900);}
+                        scheduleRetry('Host room not found or Host is not connected — retrying…',700);
                     }else if(t==='network'||t==='server-error'||t==='socket-error'||t==='socket-closed'){
-                        status('Signaling network error — retrying…',false);
-                        if(!retryScheduled){retryScheduled=true;setTimeout(()=>{if(gen===N.connectGeneration&&N.role==='client'&&!N.started)connectToHost();},900);}
+                        scheduleRetry(`PeerJS ${t} — retrying…`,1000);
+                    }else if(t==='browser-incompatible'){
+                        status('This browser cannot use WebRTC data connections.',false);
+                        setInteractionLocked(true);
                     }else{
-                        status('Connection error: '+t+' — retrying…',false);
-                        if(!retryScheduled){retryScheduled=true;setTimeout(()=>{if(gen===N.connectGeneration&&N.role==='client'&&!N.started)connectToHost();},900);}
+                        scheduleRetry(`Connection error (${t}) — retrying…`,1000);
                     }
                 });
+
+                // Give PeerJS time to establish its signaling connection.
+                // We intentionally wait for `open` before calling peer.connect;
+                // this is slightly slower than queuing, but much easier to diagnose
+                // and avoids browsers racing the signaling socket.
+                N.connectTimer=setTimeout(()=>{
+                    if(gen!==N.connectGeneration||N.role!=='client'||N.started)return;
+                    if(!peerOpened){
+                        scheduleRetry('PeerJS signaling connection timed out — retrying…',500);
+                    }
+                },CONNECT_TIMEOUT);
             }
             function showHostLobby(){
                 showLobby('Host Lobby',`<div class="bg-slate-100 border-2 border-slate-900 rounded p-3"><div class="text-[10px] font-black">ROOM CODE</div><div class="text-3xl font-black tracking-[.25em]">${N.code}</div><div class="text-xs font-black mt-2">🎯 ${esc(state.difficulty)} · ⏱️ ${state.baseTimerDuration}s / question</div><div id="or-players" class="mt-2">🔵 Blue: 0 &nbsp; 🔴 Red: 0</div><div id="or-wait-note" class="text-[10px] font-bold text-amber-700 mt-2">Waiting for at least one player to join…</div><div class="text-[10px] font-bold text-slate-500 mt-1">Host controls difficulty and starts the match. The game cannot start before a player has joined.</div><button id="or-start" disabled class="solid-btn bg-slate-300 text-slate-500 w-full py-2 mt-3 font-black cursor-not-allowed">WAITING FOR PLAYER…</button></div>`);
                 status('Room ready — waiting for players',true);document.getElementById('or-start').onclick=hostStart;renderPlayers();
             }
             function joinedCount(){let n=0;N.conns.forEach(c=>{if(c._joined)n++;});return n;}
-            function hostStart(){if(N.role!=='host'||!N.ready||joinedCount()<1){status('At least one player must join before the game can start.',false);return;}N.started=true;setInteractionLocked(N.team!==state.activeTurn);send(true);closeModal();}
+            function hostStart(){
+                if(N.role!=='host'||!N.ready||joinedCount()<1){status('At least one player must join before the game can start.',false);return;}
+                // Start the actual game only now. This is the first point at which
+                // startActivity() is allowed to create the match/question timers.
+                document.getElementById('intro-overlay').classList.add('hidden');
+                applyPlayerModeUI();
+                startActivity(tempIntroActivity);
+                N.started=true;
+                setInteractionLocked(N.team!==state.activeTurn);
+                send(true);
+                closeModal();
+            }
             function closeModal(){const m=modal();if(m)m.classList.add('hidden');}
             function clearConnectTimer(c){if(c&&c._connectTimer){clearTimeout(c._connectTimer);c._connectTimer=null;}if(!c&&N.connectTimer){clearTimeout(N.connectTimer);N.connectTimer=null;}}
             function startConnectTimer(c){
