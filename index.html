@@ -286,6 +286,23 @@
             #game-controls .time-box { padding-left: 0.4rem; padding-right: 0.4rem; }
         }
 
+        /* Online connection health / recovery UI */
+        .online-health { display:flex; align-items:center; gap:.5rem; padding:.45rem .65rem; border:2px solid #0f172a; border-radius:.75rem; background:#f8fafc; font-size:.72rem; font-weight:900; }
+        .online-health-dot { width:.6rem; height:.6rem; border-radius:999px; background:#94a3b8; flex:0 0 auto; }
+        .online-health.ok .online-health-dot { background:#10b981; }
+        .online-health.warn .online-health-dot { background:#f59e0b; }
+        .online-health.bad .online-health-dot { background:#ef4444; }
+        .online-health.spin .online-health-dot { animation: onlinePulse 1s ease-in-out infinite; }
+        @keyframes onlinePulse { 0%,100%{opacity:.35;transform:scale(.8)} 50%{opacity:1;transform:scale(1.15)} }
+        .online-recovery-actions { display:flex; gap:.5rem; margin-top:.65rem; }
+        .online-recovery-actions button { flex:1; }
+        .online-health-float { position:fixed; right:1rem; bottom:1rem; z-index:175; display:none; align-items:center; gap:.45rem; padding:.5rem .55rem .5rem .7rem; border:3px solid #0f172a; border-radius:999px; background:#fff; box-shadow:4px 4px 0 0 #0f172a; font-size:.72rem; font-weight:900; }
+        .online-health-float.show { display:flex; }
+        .online-health-float button { border:2px solid #0f172a; border-radius:999px; width:1.8rem; height:1.8rem; font-weight:900; background:#facc15; cursor:pointer; }
+        .online-health-float.ok .online-health-dot { background:#10b981; }
+        .online-health-float.warn .online-health-dot { background:#f59e0b; }
+        .online-health-float.bad .online-health-dot { background:#ef4444; }
+        @media (max-width:640px){ .online-health-float{right:.55rem;bottom:.55rem;font-size:.65rem;} }
     </style>
 </head>
 <body class="h-full flex flex-col justify-between selection:bg-yellow-300 selection:text-slate-900">
@@ -2342,11 +2359,13 @@
                 role:null,code:'',peer:null,conn:null,team:'a',started:false,phase:'idle',remote:false,
                 clock:null,ready:false,seq:0,lastAppliedSeq:0,quizResetVersion:0,
                 lastQuizResetVersion:0,clientId:'',players:new Map(),generation:0,
-                joinTimer:null,stateTimer:null,clientWatchdog:null,actionSeq:0,lastActionByPeer:new Map(),
-                lastSnapshotAt:0,connecting:false,hostPeerId:'',destroying:false
+                joinTimer:null,stateTimer:null,clientWatchdog:null,recoveryTimer:null,actionSeq:0,lastActionByPeer:new Map(),
+                lastSnapshotAt:0,connecting:false,hostPeerId:'',destroying:false,reconnectAttempts:0,lastHealthAt:0,
+                reconnecting:false,lastConnOpenAt:0
             };
             const ACTIONS=['hangmanGuess','nextHangman','hintHangman','skipQuiz','quizSubmit','nextQuiz','hintQuiz','revealQuiz','skipHangman','setTurn','reward','timeout'];
             const SYNC_INTERVAL=750, JOIN_HEARTBEAT=3000, MAX_JOIN_WAIT=30000, STALE_ACTION_MS=15000;
+            const RECONNECT_BASE=1200, RECONNECT_MAX=10000, WATCHDOG_STALE=6000;
             const PEER_ID_PREFIX='emoji-rebus-room-';
 
             function isOnlinePage(){
@@ -2387,23 +2406,62 @@
                 const m=document.createElement('div');
                 m.id='online-room-modal';
                 m.className='hidden fixed inset-0 z-[200] flex items-center justify-center bg-slate-900/85 p-4';
-                m.innerHTML=`<div class="solid-card bg-white p-5 max-w-md w-full border-4 border-slate-900"><div class="flex justify-between items-center"><h2 class="text-xl font-black uppercase">🌐 Online Room</h2><button id="or-close" class="solid-btn bg-slate-200 px-3 py-1 font-black">✕</button></div><p id="or-status" class="text-xs font-bold text-slate-500 my-3"></p><div id="or-panel" class="mt-3"></div><div id="or-players" class="mt-3 text-xs font-bold"></div></div>`;
+                m.innerHTML=`<div class="solid-card bg-white p-5 max-w-md w-full border-4 border-slate-900"><div class="flex justify-between items-center"><h2 class="text-xl font-black uppercase">🌐 Online Room</h2><button id="or-close" class="solid-btn bg-slate-200 px-3 py-1 font-black">✕</button></div><div id="or-health" class="online-health warn spin mt-3"><span class="online-health-dot"></span><span id="or-health-text">CONNECTING…</span></div><p id="or-status" class="text-xs font-bold text-slate-500 my-3"></p><div id="or-panel" class="mt-3"></div><div id="or-players" class="mt-3 text-xs font-bold"></div><div id="or-recovery" class="online-recovery-actions hidden"><button id="or-retry" class="solid-btn bg-yellow-400 text-slate-900 py-2 font-black">↻ RETRY CONNECTION</button></div></div>`;
                 document.body.appendChild(m);
+                if(!document.getElementById('online-health-float')){
+                    const f=document.createElement('div');
+                    f.id='online-health-float';
+                    f.className='online-health-float';
+                    f.innerHTML='<span class="online-health-dot"></span><span id="or-health-float-text">ONLINE</span><button id="or-health-float-retry" title="Retry connection">↻</button>';
+                    document.body.appendChild(f);
+                    document.getElementById('or-health-float-retry').onclick=()=>{if(N.role==='client')manualReconnect();else status('Host room is active. Wait for the player or create a new room.',true);};
+                }
                 document.getElementById('or-close').onclick=()=>{cleanup();m.classList.add('hidden');setInteractionLocked(false);};
+                document.getElementById('or-retry').onclick=()=>manualReconnect();
             }
             function showLobby(title,body){ensureUI();document.getElementById('or-panel').innerHTML=`<div class="text-center"><div class="font-black uppercase mb-2">${title}</div>${body}</div>`;modal().classList.remove('hidden');}
+            function setHealth(kind,text,recover=false){
+                ensureUI();
+                const box=document.getElementById('or-health'),label=document.getElementById('or-health-text'),rec=document.getElementById('or-recovery');
+                if(box){box.className=`online-health ${kind==='ok'?'ok':kind==='bad'?'bad':'warn'} ${kind==='spin'?'spin':''}`;}
+                if(label)label.textContent=text;
+                if(rec)rec.classList.toggle('hidden',!recover);
+                const f=document.getElementById('online-health-float'),ft=document.getElementById('or-health-float-text');
+                if(f){f.className=`online-health-float show ${kind==='ok'?'ok':kind==='bad'?'bad':'warn'}`;if(ft)ft.textContent=text;f.querySelector('button')?.classList.toggle('hidden',!(N.role==='client'&&(kind!=='ok'||recover)));}
+                N.lastHealthAt=Date.now();
+            }
             function status(x,ok=true){ensureUI();const e=document.getElementById('or-status');if(e){e.textContent=x;e.className=`text-xs font-bold my-3 ${ok?'text-emerald-600':'text-red-600'}`;}}
+            function scheduleReconnect(reason){
+                if(N.destroying||N.role!=='client')return;
+                clearTimeout(N.recoveryTimer);
+                N.reconnectAttempts=Math.min(N.reconnectAttempts+1,8);
+                const delay=Math.min(RECONNECT_MAX,RECONNECT_BASE*Math.pow(1.7,Math.max(0,N.reconnectAttempts-1))) + Math.floor(Math.random()*350);
+                N.reconnecting=true;
+                setHealth('warn','RECONNECTING…',true);
+                status(reason||`Reconnecting in ${Math.ceil(delay/1000)}s…`,false);
+                N.recoveryTimer=setTimeout(()=>{if(N.destroying||N.role!=='client')return;try{N.conn?.close();}catch{};N.conn=null;connectToHost(true);},delay);
+            }
+            function manualReconnect(){
+                if(N.role!=='client')return;
+                clearTimeout(N.recoveryTimer);
+                N.reconnectAttempts=0;
+                setHealth('warn','RECONNECTING…',true);
+                status('Retrying connection to Host…',false);
+                try{N.conn?.close();}catch{}
+                connectToHost(true);
+            }
             function cleanup(){
                 N.generation++;
-                clearInterval(N.clock);clearInterval(N.joinTimer);clearTimeout(N.stateTimer);clearInterval(N.clientWatchdog);
-                N.clock=N.joinTimer=N.stateTimer=N.clientWatchdog=null;
+                clearInterval(N.clock);clearInterval(N.joinTimer);clearTimeout(N.stateTimer);clearInterval(N.clientWatchdog);clearTimeout(N.recoveryTimer);
+                N.clock=N.joinTimer=N.stateTimer=N.clientWatchdog=N.recoveryTimer=null;
                 N.destroying=true;
                 try{N.conn?.close();}catch{}
                 N.players.clear();N.conn=null;
                 try{N.peer?.destroy();}catch{}
                 N.peer=null;N.destroying=false;
                 N.ready=false;N.started=false;N.phase='idle';N.role=null;N.code='';N.seq=0;N.lastAppliedSeq=0;N.remote=false;N.connecting=false;N.hostPeerId='';
-                N.actionSeq=0;N.lastActionByPeer.clear();N.lastSnapshotAt=0;N.quizResetVersion=0;N.lastQuizResetVersion=0;
+                N.actionSeq=0;N.lastActionByPeer.clear();N.lastSnapshotAt=0;N.quizResetVersion=0;N.lastQuizResetVersion=0;N.reconnectAttempts=0;N.reconnecting=false;N.lastConnOpenAt=0;
+                document.getElementById('online-health-float')?.classList.remove('show');
             }
             function pack(){
                 return {
@@ -2477,7 +2535,19 @@
                 sendEnvelope(payload,to);
             }
             function startHostTimers(){clearInterval(N.clock);N.clock=setInterval(()=>{if(N.started)sendState();},SYNC_INTERVAL);}
-            function startClientWatchdog(){clearInterval(N.clientWatchdog);N.clientWatchdog=setInterval(()=>{if(N.role!=='client'||!N.started||N.phase!=='playing')return;if(N.lastSnapshotAt&&Date.now()-N.lastSnapshotAt>5000)status('Connection is unstable — waiting for Host state sync…',false);},2000);}
+            function startClientWatchdog(){
+                clearInterval(N.clientWatchdog);
+                N.clientWatchdog=setInterval(()=>{
+                    if(N.role!=='client'||N.phase!=='playing')return;
+                    const stale=N.lastSnapshotAt&&Date.now()-N.lastSnapshotAt>WATCHDOG_STALE;
+                    if(stale&&!N.reconnecting){
+                        setHealth('warn','CONNECTION UNSTABLE',true);
+                        scheduleReconnect('Host state sync is stale — attempting recovery…');
+                    }else if(N.conn?.open&&!N.reconnecting){
+                        setHealth('ok','CONNECTED',false);
+                    }
+                },2000);
+            }
             function renderPlayers(){
                 const e=document.getElementById('or-players');if(!e)return;let a=1,b=0;N.players.forEach(p=>{if(p.team==='b')b++;});e.innerHTML=`🔵 Blue: ${a} &nbsp; 🔴 Red: ${b}`;
                 const start=document.getElementById('or-start'),note=document.getElementById('or-wait-note');
@@ -2522,11 +2592,14 @@
             function attachConnection(conn,peerRole){
                 if(!conn)return;
                 conn.on('open',()=>{
+                    N.ready=true;N.connecting=false;N.reconnecting=false;N.reconnectAttempts=0;N.lastConnOpenAt=Date.now();
                     if(peerRole==='client'){
-                        N.ready=true;N.connecting=false;status('Connected — waiting for Host to start',true);startClientWatchdog();
-                        sendEnvelope({type:'join',from:N.clientId,team:'b',clientId:N.clientId});
+                        setHealth('ok','CONNECTED',false);
+                        status('Connected — synchronizing with Host…',true);startClientWatchdog();
+                        sendEnvelope({type:'join',from:N.clientId,team:'b',clientId:N.clientId,rejoin:!!N.started});
                     }else{
-                        N.ready=true;N.connecting=false;status('Player connected — waiting for Host to start',true);
+                        setHealth('ok','PLAYER CONNECTED',false);
+                        status('Player connected — waiting for Host to start',true);
                     }
                 });
                 conn.on('data',payload=>{
@@ -2545,7 +2618,7 @@
                         }
                     }else if(N.role==='client'&&conn===N.conn){
                         if(payload.type==='hello'&&payload.to===N.clientId){
-                            N.ready=true;N.started=!!payload.started;N.phase=payload.phase||payload.state?.phase||(N.started?'playing':'lobby');clearInterval(N.joinTimer);clearTimeout(N.stateTimer);apply(payload.state,payload.seq||0);status(N.started?'Game synchronized':'Connected — waiting for Host to start',true);if(N.started)closeModal();
+                            N.ready=true;N.started=!!payload.started;N.phase=payload.phase||payload.state?.phase||(N.started?'playing':'lobby');clearInterval(N.joinTimer);clearTimeout(N.stateTimer);apply(payload.state,payload.seq||0);setHealth('ok','CONNECTED',false);N.reconnecting=false;status(N.started?'Game synchronized':'Connected — waiting for Host to start',true);if(N.started)closeModal();
                         }else if(payload.type==='state'&&(!payload.to||payload.to===N.clientId)){
                             N.started=!!payload.started;N.phase=payload.phase||payload.state?.phase||(N.started?'playing':'lobby');apply(payload.state,payload.seq||0);if(N.started)closeModal();status(N.started?'Game synchronized':'Connected — waiting for Host to start',true);
                         }
@@ -2553,40 +2626,55 @@
                 });
                 conn.on('close',()=>{
                     if(N.destroying)return;
-                    if(N.role==='host'){N.ready=!!N.peer&&!N.peer.destroyed;N.conn=null;N.players.clear();renderPlayers();setInteractionLocked(false);status('Player disconnected. Waiting for them to re-join…',false);}
-                    else {N.ready=false;setInteractionLocked(true);status('Connection to Host lost. Trying to reconnect…',false);}
+                    if(N.role==='host'){N.ready=!!N.peer&&!N.peer.destroyed;N.conn=null;N.players.clear();renderPlayers();setHealth('warn','WAITING FOR PLAYER',false);setInteractionLocked(false);status('Player disconnected. Waiting for them to re-join…',false);}
+                    else {N.ready=false;setInteractionLocked(true);setHealth('warn','RECONNECTING…',true);status('Connection to Host lost. Attempting automatic recovery…',false);scheduleReconnect('Connection closed — retrying…');}
                 });
-                conn.on('error',err=>{console.warn('[Emoji Rebus] Peer connection error',err);status('Online connection error — retrying…',false);});
+                conn.on('error',err=>{
+                    console.warn('[Emoji Rebus] Peer connection error',err);
+                    if(N.role==='client'){setHealth('bad','CONNECTION ERROR',true);scheduleReconnect('Connection error — retrying…');}
+                    else{setHealth('warn','PLAYER CONNECTION ERROR',false);status('Player connection error. The player can retry joining.',false);}
+                });
             }
             function createHostPeer(){
                 const gen=N.generation,code=N.code;
                 N.hostPeerId=peerIdForCode(code);N.connecting=true;
                 try{N.peer=new Peer(N.hostPeerId,{debug:0,config:{iceServers:[{urls:'stun:stun.l.google.com:19302'}]}});}catch(e){status('Could not start online room.',false);return;}
-                N.peer.on('open',id=>{if(gen!==N.generation)return;N.ready=true;N.connecting=false;startHostTimers();renderPlayers();status('Room ready — waiting for a player',true);});
+                N.peer.on('open',id=>{if(gen!==N.generation)return;N.ready=true;N.connecting=false;N.reconnectAttempts=0;setHealth('ok','ROOM ONLINE',false);startHostTimers();renderPlayers();status('Room ready — waiting for a player',true);});
                 N.peer.on('connection',conn=>{if(gen!==N.generation)return;if(N.conn&&N.conn.open&&N.conn!==conn){try{conn.close();}catch{}status('Only one Red Team player is supported in this room.',false);return;}N.conn=conn;attachConnection(conn,'host');});
-                N.peer.on('disconnected',()=>{if(gen!==N.generation)return;N.ready=false;status('Online signaling connection lost — reconnecting…',false);try{N.peer.reconnect();}catch{}});
+                N.peer.on('disconnected',()=>{if(gen!==N.generation)return;N.ready=false;setHealth('warn','SIGNALING RECONNECTING…',true);status('Online signaling connection lost — reconnecting…',false);try{N.peer.reconnect();}catch{}});
                 N.peer.on('error',err=>{
                     if(gen!==N.generation)return;
                     console.error('[Emoji Rebus] Peer error:',err);
-                    if(err.type==='unavailable-id'){status('Room code is already in use. Please close this lobby and create a new room.',false);}else status(`Online error: ${err.type||'connection failed'}`,false);
-                    if(err.type==='peer-unavailable'||err.type==='network')N.ready=false;
+                    if(err.type==='unavailable-id'){setHealth('bad','ROOM ID BUSY',false);status('Room code is already in use. Please close this lobby and create a new room.',false);}else {setHealth('bad','ONLINE ERROR',N.role==='client');status(`Online error: ${err.type||'connection failed'}`,false);}
+                    if(err.type==='peer-unavailable'||err.type==='network'){N.ready=false;if(N.role==='client')scheduleReconnect('Host not reachable — retrying…');}
                 });
             }
             function create(){
                 if(!readyForOnline())return;
                 cleanup();N.role='host';N.team='a';N.code=makeRoomCode();N.started=false;N.phase='lobby';N.ready=false;N.clientId=clientId();N.generation++;
-                setInteractionLocked(true);showHostLobby();status('Creating room…',true);createHostPeer();
+                setInteractionLocked(true);showHostLobby();setHealth('warn','CREATING ROOM…',true);status('Creating room…',true);createHostPeer();
             }
-            function connectToHost(){
-                if(!N.peer||N.peer.destroyed)return;
-                try{const conn=N.peer.connect(N.hostPeerId,{reliable:true,serialization:'json'});N.conn=conn;attachConnection(conn,'client');}catch{status('Could not connect to the Host yet — retrying…',false);}
+            function connectToHost(isRecovery=false){
+                if(N.role!=='client'||!N.peer||N.peer.destroyed)return;
+                if(N.conn?.open&&!isRecovery){N.reconnecting=false;setHealth('ok','CONNECTED',false);return;}
+                if(isRecovery&&N.conn?.open){try{N.conn.close();}catch{};N.conn=null;}
+                clearTimeout(N.recoveryTimer);
+                try{
+                    N.connecting=true;
+                    setHealth('warn','CONNECTING…',true);
+                    const conn=N.peer.connect(N.hostPeerId,{reliable:true,serialization:'json',metadata:{clientId:N.clientId}});
+                    N.conn=conn;attachConnection(conn,'client');
+                    if(isRecovery)status('Trying to restore the Host connection…',true);
+                }catch{
+                    scheduleReconnect('Could not connect to the Host yet. Retrying…');
+                }
             }
             function createClientPeer(){
                 const gen=N.generation;N.connecting=true;
                 try{N.peer=new Peer(undefined,{debug:0,config:{iceServers:[{urls:'stun:stun.l.google.com:19302'}]}});}catch{status('Could not start online connection.',false);return;}
-                N.peer.on('open',()=>{if(gen!==N.generation)return;N.ready=false;N.connecting=false;connectToHost();clearInterval(N.joinTimer);N.joinTimer=setInterval(()=>{if(N.role==='client'&&!N.conn?.open)connectToHost();},JOIN_HEARTBEAT);clearTimeout(N.stateTimer);N.stateTimer=setTimeout(()=>{if(!N.started&&gen===N.generation)status('Could not reach the Host. Check the room code and make sure the Host is still in the lobby.',false);},MAX_JOIN_WAIT);});
-                N.peer.on('disconnected',()=>{if(gen!==N.generation)return;try{N.peer.reconnect();}catch{}});
-                N.peer.on('error',err=>{if(gen!==N.generation)return;console.warn('[Emoji Rebus] Peer client error:',err);if(err.type==='peer-unavailable')status('Room not found yet — retrying…',false);else status(`Online error: ${err.type||'connection failed'}`,false);});
+                N.peer.on('open',()=>{if(gen!==N.generation)return;N.ready=false;N.connecting=false;setHealth('warn','CONNECTING TO HOST…',true);connectToHost();clearInterval(N.joinTimer);N.joinTimer=setInterval(()=>{if(N.role==='client'&&!N.conn?.open)connectToHost(true);},JOIN_HEARTBEAT);clearTimeout(N.stateTimer);N.stateTimer=setTimeout(()=>{if(!N.started&&gen===N.generation&&!N.conn?.open){setHealth('bad','HOST NOT REACHABLE',true);status('Could not reach the Host. Automatic recovery is still running — you can retry now.',false);}},MAX_JOIN_WAIT);});
+                N.peer.on('disconnected',()=>{if(gen!==N.generation)return;setHealth('warn','SIGNALING RECONNECTING…',true);try{N.peer.reconnect();}catch{scheduleReconnect('Signaling connection lost — retrying…');}});
+                N.peer.on('error',err=>{if(gen!==N.generation)return;console.warn('[Emoji Rebus] Peer client error:',err);if(err.type==='peer-unavailable'){setHealth('warn','HOST NOT FOUND',true);scheduleReconnect('Room/Host not reachable — retrying…');}else{setHealth('bad','ONLINE ERROR',true);scheduleReconnect(`Online error: ${err.type||'connection failed'} — retrying…`);}});
             }
             function join(code){
                 if(!readyForOnline())return;
