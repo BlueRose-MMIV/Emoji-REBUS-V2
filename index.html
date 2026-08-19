@@ -1970,6 +1970,9 @@
         }
 
         function setTeamTurn(team) {
+            // Online turn changes are authoritative and must only come from game resolution;
+            // manual team switching remains a local/offline feature.
+            if (window.N && (window.N.role === 'host' || window.N.role === 'client') && window.N.phase === 'playing') return;
             if (state.mode !== 'team' || state.activeTurn === team) return;
             if (state.streakRisk && state.streakRisk.team !== team) return;
             state.activeTurn = team;
@@ -2739,22 +2742,24 @@
                 const old=state.currentPuzzleIndex,oldTab=state.activeTab,puzzleChanged=old!==s.currentPuzzleIndex,tabChanged=oldTab!==s.activeTab,remoteQuizReset=typeof s.quizResetVersion==='number'&&s.quizResetVersion!==N.lastQuizResetVersion;
                 if(typeof s.quizResetVersion==='number')N.lastQuizResetVersion=s.quizResetVersion;
                 Object.assign(state,{activeTab:s.activeTab,mode:s.mode,currentPuzzleIndex:s.currentPuzzleIndex,questionAnswered:!!s.questionAnswered,availableIndices:s.availableIndices||[],soloScore:s.soloScore,soloStreak:s.soloStreak,teamA:{...state.teamA,...s.teamA},teamB:{...state.teamB,...s.teamB},activeTurn:s.activeTurn,hangmanHearts:s.hangmanHearts,hangmanGuessedLetters:new Set(s.hangmanGuessedLetters||[]),hangmanHintUsed:s.hangmanHintUsed,quizHintUsed:s.quizHintUsed,questionTimeLeft:s.questionTimeLeft,globalTimeLeft:s.globalTimeLeft,streakRisk:s.streakRisk||null,baseTimerDuration:s.baseTimerDuration,matchDurationMinutes:s.matchDurationMinutes});
-                if (typeof s.streakRewardKey === 'string' && s.streakRewardKey) { N.streakRewardKey=s.streakRewardKey; }
+                // Establish phase before any online-only UI so the reward modal can correctly
+                // determine whether this peer is a chooser or a read-only observer.
+                N.phase=s.phase==='ended'||Number(s.globalTimeLeft)<=0?'ended':s.phase==='playing'?'playing':'lobby';
+                N.started=N.phase==='playing';
+                if (typeof s.streakRewardKey === 'string') { N.streakRewardKey=s.streakRewardKey; }
                 if (typeof s.streakRewardPending === 'boolean') {
                     N.streakRewardPending = s.streakRewardPending;
                 }
                 if (s.streakRewardPending && state.mode === 'team' && N.phase !== 'ended' && N.streakRewardKey) {
-                    const winningTeam = String(N.streakRewardKey).split(':')[0];
-                    if (N.role === 'client' && N.team === winningTeam) {
-                        triggerStreakRewardModal();
-                    }
+                    // Every online peer sees the reward announcement; triggerStreakRewardModal()
+                    // makes the controls read-only when this peer is not the reward owner.
+                    if (N.role === 'client') triggerStreakRewardModal();
                 }
                 if (!s.streakRewardPending && (N.streakRewardBusy || (N.role==='client' && !document.getElementById('streak-reward-modal')?.classList.contains('hidden')))) closeStreakRewardModal();
                 const incomingFeedback=s.onlineFeedback;
                 const feedbackChanged=!!incomingFeedback&&incomingFeedback.version!==N.onlineFeedbackVersion;
                 if(incomingFeedback&&incomingFeedback.version>N.onlineFeedbackVersion){N.onlineFeedbackVersion=incomingFeedback.version;N.onlineFeedback=incomingFeedback;}
 
-                N.phase=s.phase==='ended'||Number(s.globalTimeLeft)<=0?'ended':s.phase==='playing'?'playing':'lobby';N.started=N.phase==='playing';
                 if(N.phase==='ended'){stopCurrentQuestionTimer();clearInterval(state.globalTimerInterval);clearInterval(state.questionTimerInterval);}
                 if(N.role==='client'){clearInterval(state.globalTimerInterval);clearInterval(state.questionTimerInterval);state.globalTimerInterval=null;state.questionTimerInterval=null;}
                 if(remoteQuizReset){const qi=document.getElementById('quiz-input');if(qi){qi.value='';onQuizInputType(qi);}}
