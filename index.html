@@ -1864,6 +1864,12 @@
         }
 
         function onQuizInputType(inputEl) {
+            // Online multiplayer: clients may only type during their authoritative turn.
+            if ((window.N && (N.role==='client'||N.role==='host') && N.phase==='playing') && N.team!==state.activeTurn) {
+                inputEl.value = '';
+                renderQuizTypedBoxes();
+                return;
+            }
             inputEl.value = inputEl.value.replace(/[^a-zA-Z]/g, '').toUpperCase();
             renderQuizTypedBoxes();
         }
@@ -2784,20 +2790,25 @@
             }
             function setInteractionLocked(lock,opts={}){
                 const preserveInput=!!opts.preserveInput;
-                document.body.classList.toggle('online-waiting-turn',!!lock&&!preserveInput);
+                const onlinePlaying=(N.role==='client'||N.role==='host')&&N.started&&N.phase==='playing';
+                const isMyTurn=state.activeTurn===N.team;
+                // In online multiplayer, turn ownership is authoritative. A client that is not the
+                // active team must NEVER be allowed to type/submit locally, even if a recovery
+                // callback temporarily clears the generic lock.
+                const onlineTurnLock=onlinePlaying&&!isMyTurn;
+                const hardLock=onlineTurnLock || (!!lock&&!preserveInput);
+                document.body.classList.toggle('online-waiting-turn',hardLock);
                 const quizInput=document.getElementById('quiz-input');
-                const shouldDisableInput=!!lock&&!preserveInput;
-                ['quiz-input'].forEach(id=>{const e=document.getElementById(id);if(e)e.disabled=shouldDisableInput;});
-                // Submit/reveal remain disabled during a hard lock, but when reconnecting on our turn
-                // they stay clickable and are queued by sendAct().
-                ['quiz-submit-btn','quiz-reveal-btn'].forEach(id=>{const e=document.getElementById(id);if(e)e.disabled=shouldDisableInput;});
+                const shouldDisableInput=hardLock;
+                ['quiz-input'].forEach(id=>{const e=document.getElementById(id);if(e){e.disabled=shouldDisableInput;e.readOnly=shouldDisableInput;}});
+                ['quiz-submit-btn','quiz-reveal-btn'].forEach(id=>{const e=document.getElementById(id);if(e)e.disabled=hardLock;});
                 document.querySelectorAll('#view-hangman button, #view-play button').forEach(b=>{
                     if(b.id==='sound-toggle'||b.closest('#optional-controls'))return;
-                    b.disabled=shouldDisableInput;
+                    b.disabled=hardLock;
                 });
                 if(quizInput){
-                    const onlineRecovering=N.role==='client'&&N.networkRecovering&&state.activeTurn===N.team&&N.started;
-                    quizInput.placeholder=onlineRecovering?'TYPE ANSWER — WILL SEND WHEN RECONNECTED':(lock?'WAITING FOR OPPONENT…':'TYPE YOUR ANSWER…');
+                    const onlineRecovering=N.role==='client'&&N.networkRecovering&&isMyTurn&&N.started;
+                    quizInput.placeholder=onlineRecovering?'TYPE ANSWER — WILL SEND WHEN RECONNECTED':(onlineTurnLock?'WAITING FOR OPPONENT…':(lock?'RECONNECTING…':'TYPE YOUR ANSWER…'));
                     quizInput.classList.toggle('opacity-50',shouldDisableInput);
                     quizInput.classList.toggle('cursor-not-allowed',shouldDisableInput);
                 }
@@ -2815,15 +2826,15 @@
                 if(N.role==='host'){N.remote=true;try{run(a);}finally{N.remote=false;}sendState();}
                 return true;
             }
-            window.handleHangmanGuess=function(v){if((N.role==='client'||N.role==='host')&&!N.remote&&N.phase==='playing'&&N.team===state.activeTurn){sendAct({t:'hangmanGuess',v});return;}const before=state.questionAnswered;const r=O.handleHangmanGuess.apply(this,arguments);if(N.role==='host'&&!N.remote&&!before&&state.questionAnswered)markOnlineQuestionResolved('hangmanGuess');if(N.role==='host'&&!N.remote)sendState();return r;};
-            window.nextHangman=function(){if(!N.remote&&N.phase==='playing'&&(N.role==='client'||N.role==='host')&&N.team===state.activeTurn){if(!confirmOnlineManualNext('Hangman'))return;sendAct({t:'nextHangman'});return;}clearOnlineAutoAdvance();const r=O.nextHangman.apply(this,arguments);if(N.role==='host'&&!N.remote)sendState();return r;};
-            window.giveHangmanHint=function(){if(!N.remote&&N.phase==='playing'&&(N.role==='client'||N.role==='host')){sendAct({t:'hintHangman'});return;}const r=O.giveHangmanHint.apply(this,arguments);if(N.role==='host'&&!N.remote)sendState();return r;};
-            window.skipHangmanPuzzle=function(){if(!N.remote&&N.phase==='playing'&&(N.role==='client'||N.role==='host')&&N.team===state.activeTurn){sendAct({t:'skipHangman'});return;}const r=O.skipHangmanPuzzle.apply(this,arguments);if(N.role==='host'&&!N.remote)sendState();return r;};
-            window.handleQuizSubmit=function(e){if((N.role==='client'||N.role==='host')&&!N.remote&&N.phase==='playing'&&N.team===state.activeTurn){e.preventDefault();sendAct({t:'quizSubmit',v:document.getElementById('quiz-input')?.value||''});return;}const before=state.questionAnswered;const r=O.handleQuizSubmit.apply(this,arguments);if(N.role==='host'&&!N.remote){if(!before&&!state.questionAnswered)N.quizResetVersion++;if(!before&&state.questionAnswered)markOnlineQuestionResolved('quizSubmit');sendState();}return r;};
+            window.handleHangmanGuess=function(v){if((N.role==='client'||N.role==='host')&&!N.remote&&N.phase==='playing'){if(N.team!==state.activeTurn)return;sendAct({t:'hangmanGuess',v});return;}const before=state.questionAnswered;const r=O.handleHangmanGuess.apply(this,arguments);if(N.role==='host'&&!N.remote&&!before&&state.questionAnswered)markOnlineQuestionResolved('hangmanGuess');if(N.role==='host'&&!N.remote)sendState();return r;};
+            window.nextHangman=function(){if(!N.remote&&N.phase==='playing'&&(N.role==='client'||N.role==='host')){if(N.team!==state.activeTurn)return;if(!confirmOnlineManualNext('Hangman'))return;sendAct({t:'nextHangman'});return;}clearOnlineAutoAdvance();const r=O.nextHangman.apply(this,arguments);if(N.role==='host'&&!N.remote)sendState();return r;};
+            window.giveHangmanHint=function(){if(!N.remote&&N.phase==='playing'&&(N.role==='client'||N.role==='host')){if(N.team!==state.activeTurn)return;sendAct({t:'hintHangman'});return;}const r=O.giveHangmanHint.apply(this,arguments);if(N.role==='host'&&!N.remote)sendState();return r;};
+            window.skipHangmanPuzzle=function(){if(!N.remote&&N.phase==='playing'&&(N.role==='client'||N.role==='host')){if(N.team!==state.activeTurn)return;sendAct({t:'skipHangman'});return;}const r=O.skipHangmanPuzzle.apply(this,arguments);if(N.role==='host'&&!N.remote)sendState();return r;};
+            window.handleQuizSubmit=function(e){if((N.role==='client'||N.role==='host')&&!N.remote&&N.phase==='playing'){e.preventDefault();if(N.team!==state.activeTurn)return;sendAct({t:'quizSubmit',v:document.getElementById('quiz-input')?.value||''});return;}const before=state.questionAnswered;const r=O.handleQuizSubmit.apply(this,arguments);if(N.role==='host'&&!N.remote){if(!before&&!state.questionAnswered)N.quizResetVersion++;if(!before&&state.questionAnswered)markOnlineQuestionResolved('quizSubmit');sendState();}return r;};
             window.nextQuiz=function(){if(!N.remote&&N.phase==='playing'&&(N.role==='client'||N.role==='host')&&N.team===state.activeTurn){if(!confirmOnlineManualNext('Quiz'))return;sendAct({t:'nextQuiz'});return;}clearOnlineAutoAdvance();const r=O.nextQuiz.apply(this,arguments);if(N.role==='host'&&!N.remote)sendState();return r;};
-            window.giveQuizHint=function(){if(!N.remote&&N.phase==='playing'&&(N.role==='client'||N.role==='host')){sendAct({t:'hintQuiz'});return;}const r=O.giveQuizHint.apply(this,arguments);if(N.role==='host'&&!N.remote)sendState();return r;};
-            window.revealQuizAnswer=function(){if(!N.remote&&N.phase==='playing'&&(N.role==='client'||N.role==='host')){sendAct({t:'revealQuiz'});return;}const before=state.questionAnswered;const r=O.revealQuizAnswer.apply(this,arguments);if(N.role==='host'&&!N.remote&&!before&&state.questionAnswered)markOnlineQuestionResolved('revealQuiz');if(N.role==='host'&&!N.remote)sendState();return r;};
-            window.skipQuizPuzzle=function(){if(!N.remote&&N.phase==='playing'&&(N.role==='client'||N.role==='host')&&N.team===state.activeTurn){sendAct({t:'skipQuiz'});return;}const r=O.skipQuizPuzzle.apply(this,arguments);if(N.role==='host'&&!N.remote)sendState();return r;};
+            window.giveQuizHint=function(){if(!N.remote&&N.phase==='playing'&&(N.role==='client'||N.role==='host')){if(N.team!==state.activeTurn)return;sendAct({t:'hintQuiz'});return;}const r=O.giveQuizHint.apply(this,arguments);if(N.role==='host'&&!N.remote)sendState();return r;};
+            window.revealQuizAnswer=function(){if(!N.remote&&N.phase==='playing'&&(N.role==='client'||N.role==='host')){if(N.team!==state.activeTurn)return;sendAct({t:'revealQuiz'});return;}const before=state.questionAnswered;const r=O.revealQuizAnswer.apply(this,arguments);if(N.role==='host'&&!N.remote&&!before&&state.questionAnswered)markOnlineQuestionResolved('revealQuiz');if(N.role==='host'&&!N.remote)sendState();return r;};
+            window.skipQuizPuzzle=function(){if(!N.remote&&N.phase==='playing'&&(N.role==='client'||N.role==='host')){if(N.team!==state.activeTurn)return;sendAct({t:'skipQuiz'});return;}const r=O.skipQuizPuzzle.apply(this,arguments);if(N.role==='host'&&!N.remote)sendState();return r;};
             window.setTeamTurn=function(v){if(!N.remote&&N.phase==='playing'&&(N.role==='client'||N.role==='host')){sendAct({t:'setTurn',v});return;}const r=O.setTeamTurn.apply(this,arguments);if(N.role==='host'&&!N.remote)sendState();return r;};
             window.applyStreakReward=function(v){if(!N.remote&&N.phase==='playing'&&(N.role==='client'||N.role==='host')){sendAct({t:'reward',v});return;}const r=O.applyStreakReward.apply(this,arguments);if(N.role==='host'&&!N.remote)sendState();return r;};
             window.handleQuestionTimeout=function(){if(!N.remote&&N.phase==='playing'&&(N.role==='client'||N.role==='host')){sendAct({t:'timeout'});return;}const before=state.questionAnswered;const r=O.handleQuestionTimeout.apply(this,arguments);if(N.role==='host'&&!N.remote&&!before&&state.questionAnswered)markOnlineQuestionResolved('timeout');if(N.role==='host'&&!N.remote)sendState();return r;};
