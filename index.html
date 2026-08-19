@@ -2482,13 +2482,15 @@
                     else if(N.role==='host'){setHealth('ok',`MESH ONLINE · ${meshCount()} PEER${meshCount()===1?'':'S'}`,false);status('Player connected to mesh.',true);}
                 });
                 conn.on('data',payload=>handleMeshPayload(payload,conn,peerId));
+                const inspect=()=>{try{const pc=conn.peerConnection, ice=pc?.iceConnectionState, cs=pc?.connectionState;if(N.role==='client'&&peerId===N.hostPeerId&&!conn.open){if(ice==='checking')setHealth('warn','ICE CHECKING…',true);else if(ice==='failed'||cs==='failed')setHealth('warn','ICE FAILED · RETRYING TURN…',true);} }catch{}};
+                const inspectTimer=setInterval(()=>{if(!N.mesh.has(peerId)||N.destroying){clearInterval(inspectTimer);return;}inspect();},1000);
                 conn.on('close',()=>{
                     N.mesh.delete(peerId);N.players.delete(peerId);N.pendingPeers.delete(peerId);renderPlayers();updateMeshHealth();
                     if(N.destroying)return;
                     if(N.role==='client'&&peerId===N.hostPeerId){N.ready=false;setHealth('warn','MESH RECOVERING…',true);status('Host path lost. Rejoining the room mesh…',false);scheduleMeshReconnect();}
                     else if(N.role==='host'){status('A peer left the mesh. Other peers remain connected.',false);}
                 });
-                conn.on('error',()=>{N.mesh.delete(peerId);N.players.delete(peerId);renderPlayers();updateMeshHealth();if(N.role==='client'&&peerId===N.hostPeerId)scheduleMeshReconnect();});
+                conn.on('error',(err)=>{console.warn('[Emoji Rebus Mesh] DataConnection error',peerId,err);N.mesh.delete(peerId);N.players.delete(peerId);renderPlayers();updateMeshHealth();if(N.role==='client'&&peerId===N.hostPeerId){setHealth('bad',`WEBRTC ERROR · ${peerErrorText(err)}`,true);scheduleMeshReconnect();}});
             }
             function handleMeshPayload(payload,conn,fromPeer){
                 if(N.destroying||!payload)return;
@@ -2556,20 +2558,32 @@
             function acceptRemoteAction(payload){
                 if(!payload?.from||!Number.isInteger(payload.id)||!valid(payload.a))return false;const p=N.players.get(payload.from);if(!p||p.team!=='b'||state.activeTurn!=='b'||N.phase!=='playing')return false;return true;
             }
+            const PEER_SERVER={host:'0.peerjs.com',port:443,path:'/',secure:true};
+            // Public Open Relay TURN fallback. Direct/STUN is tried first; TURN is only used when needed.
+            // Metered publishes these endpoints for browser WebRTC clients.
+            const ICE_CONFIG={iceServers:[
+                {urls:'stun:stun.l.google.com:19302'},
+                {urls:'stun:openrelay.metered.ca:80'},
+                {urls:'turn:openrelay.metered.ca:80',username:'openrelayproject',credential:'openrelayproject'},
+                {urls:'turn:openrelay.metered.ca:443',username:'openrelayproject',credential:'openrelayproject'},
+                {urls:'turn:openrelay.metered.ca:443?transport=tcp',username:'openrelayproject',credential:'openrelayproject'}
+            ],sdpSemantics:'unified-plan'};
+            function peerOptions(debug=1){return {...PEER_SERVER,config:ICE_CONFIG,debug};}
+            function peerErrorText(err){return String(err?.type||err?.message||'unknown').replace(/-/g,' ');}
             function createHostPeer(){
                 const gen=N.generation;N.hostPeerId=peerIdForCode(N.code);N.connecting=true;
-                try{N.peer=new Peer(N.hostPeerId,{debug:0});}catch{status('Could not start online room.',false);setHealth('bad','ONLINE ERROR',false);return;}
+                try{N.peer=new Peer(N.hostPeerId,peerOptions(2));}catch{status('Could not start online room.',false);setHealth('bad','ONLINE ERROR',false);return;}
                 N.peer.on('open',id=>{if(gen!==N.generation)return;N.ready=true;N.connecting=false;setHealth('ok','MESH ONLINE · 0 PEERS',false);startHostTimers();renderPlayers();status('Room ready — waiting for players to join the mesh',true);});
                 N.peer.on('connection',conn=>{if(gen!==N.generation)return;const pid=conn.peer;N.mesh.set(pid,conn);attachMeshConnection(conn,pid,true);});
-                N.peer.on('disconnected',()=>{if(gen!==N.generation)return;N.ready=false;setHealth('warn','SIGNALING RECOVERING…',true);try{N.peer.reconnect();}catch{}});
-                N.peer.on('error',err=>{if(gen!==N.generation)return;console.warn('[Emoji Rebus Mesh] Host peer error',err);if(err.type==='unavailable-id'){setHealth('bad','ROOM ID BUSY',false);status('Room code is already in use. Create a new room.',false);}else setHealth('bad','ONLINE ERROR',false);});
+                N.peer.on('disconnected',()=>{if(gen!==N.generation)return;N.ready=false;setHealth('warn','SIGNALING RECOVERING…',true);status('Signaling connection lost — reconnecting…',false);try{N.peer.reconnect();}catch{}});
+                N.peer.on('error',err=>{if(gen!==N.generation)return;console.warn('[Emoji Rebus Mesh] Host peer error',err);const t=peerErrorText(err);if(err.type==='unavailable-id'){setHealth('bad','ROOM ID BUSY',false);status('This room code is currently busy. Create a new room.',false);}else{setHealth('bad',`ONLINE ERROR · ${t}`,false);status(`Online error: ${t}. Retry or create a new room.`,false);}});
             }
             function createClientPeer(){
                 const gen=N.generation;N.connecting=true;
-                try{N.peer=new Peer(undefined,{debug:0});}catch{status('Could not start online connection.',false);return;}
-                N.peer.on('open',()=>{if(gen!==N.generation)return;N.connecting=false;setHealth('warn','JOINING MESH…',true);connectPeer(N.hostPeerId);clearTimeout(N.stateTimer);N.stateTimer=setTimeout(()=>{if(gen===N.generation&&!N.mesh.has(N.hostPeerId)){setHealth('bad','HOST NOT REACHABLE',true);status('Could not reach the room bootstrap peer. You can retry.',false);}},MAX_JOIN_WAIT);});
-                N.peer.on('disconnected',()=>{if(gen!==N.generation)return;setHealth('warn','SIGNALING RECOVERING…',true);try{N.peer.reconnect();}catch{scheduleMeshReconnect();}});
-                N.peer.on('error',err=>{if(gen!==N.generation)return;console.warn('[Emoji Rebus Mesh] Client peer error',err);setHealth('bad','ONLINE ERROR',true);scheduleMeshReconnect();});
+                try{N.peer=new Peer(undefined,peerOptions(2));}catch{status('Could not start online connection.',false);return;}
+                N.peer.on('open',()=>{if(gen!==N.generation)return;N.connecting=false;setHealth('warn','CONNECTING TO HOST…',true);status('Signaling connected — opening WebRTC data channel…',true);connectPeer(N.hostPeerId);clearTimeout(N.stateTimer);N.stateTimer=setTimeout(()=>{if(gen===N.generation&&!N.mesh.has(N.hostPeerId)){setHealth('bad','HOST NOT REACHABLE',true);status('WebRTC connection failed. TURN fallback was tried; use Retry Connection or create a new room.',false);}},MAX_JOIN_WAIT);});
+                N.peer.on('disconnected',()=>{if(gen!==N.generation)return;setHealth('warn','SIGNALING RECOVERING…',true);status('Signaling connection lost — reconnecting…',false);try{N.peer.reconnect();}catch{scheduleMeshReconnect();}});
+                N.peer.on('error',err=>{if(gen!==N.generation)return;console.warn('[Emoji Rebus Mesh] Client peer error',err);const t=peerErrorText(err);setHealth('bad',`ONLINE ERROR · ${t}`,true);status(`Online error: ${t}. Retrying…`,false);scheduleMeshReconnect();});
                 startClientWatchdog();
             }
             function create(){
@@ -2581,7 +2595,7 @@
             function inviteLink(){try{const url=new URL(location.href);url.searchParams.set('room',N.code);return url.toString();}catch{return `${location.origin}${location.pathname}?room=${encodeURIComponent(N.code)}`;}}
             async function copyInviteLink(){const link=inviteLink();try{await navigator.clipboard.writeText(link);status('Invite link copied — send it to your friend.',true);}catch{const ta=document.createElement('textarea');ta.value=link;document.body.appendChild(ta);ta.select();try{document.execCommand('copy');status('Invite link copied — send it to your friend.',true);}catch{status(link,true);}ta.remove();}}
             function showHostLobby(){
-                showLobby('Host Lobby',`<div class="bg-slate-100 border-2 border-slate-900 rounded-xl p-3"><div class="text-[10px] font-black uppercase">ROOM CODE</div><div class="text-4xl sm:text-5xl font-black tracking-[.28em] mt-1">${escRoom(N.code)}</div><button id="or-copy-link" class="solid-btn bg-yellow-400 text-slate-900 w-full py-2 mt-3 font-black">📋 COPY INVITE LINK</button><div class="text-[10px] font-bold text-slate-500 mt-2">P2P mesh room — send the link or this code to your friend.</div><div class="text-xs font-black mt-3">🎯 ${escRoom(state.difficulty)} · ⏱️ ${state.baseTimerDuration}s / question</div><div id="or-players" class="mt-2">🔵 Blue: 1 &nbsp; 🔴 Red: 0</div><div id="or-wait-note" class="text-[10px] font-bold text-amber-700 mt-2">Waiting for a player to join the mesh…</div><div class="text-[10px] font-bold text-slate-500 mt-1">Game events travel peer-to-peer. Host remains the current game-state authority.</div><button id="or-start" disabled class="solid-btn bg-slate-300 text-slate-500 w-full py-2 mt-3 font-black cursor-not-allowed">WAITING FOR PLAYER…</button></div>`);
+                showLobby('Host Lobby',`<div class="bg-slate-100 border-2 border-slate-900 rounded-xl p-3"><div class="text-[10px] font-black uppercase">ROOM CODE</div><div class="text-4xl sm:text-5xl font-black tracking-[.28em] mt-1">${escRoom(N.code)}</div><button id="or-copy-link" class="solid-btn bg-yellow-400 text-slate-900 w-full py-2 mt-3 font-black">📋 COPY INVITE LINK</button><div class="text-[10px] font-bold text-slate-500 mt-2">P2P mesh room — send the link or this code to your friend.</div><div class="text-xs font-black mt-3">🎯 ${escRoom(state.difficulty)} · ⏱️ ${state.baseTimerDuration}s / question</div><div id="or-players" class="mt-2">🔵 Blue: 1 &nbsp; 🔴 Red: 0</div><div id="or-wait-note" class="text-[10px] font-bold text-amber-700 mt-2">Waiting for a player to join the mesh…</div><div class="text-[10px] font-bold text-slate-500 mt-1">Game events travel peer-to-peer. Direct/STUN is preferred; TURN relay is enabled as a fallback.</div><button id="or-start" disabled class="solid-btn bg-slate-300 text-slate-500 w-full py-2 mt-3 font-black cursor-not-allowed">WAITING FOR PLAYER…</button></div>`);
                 document.getElementById('or-copy-link').onclick=copyInviteLink;document.getElementById('or-start').onclick=hostStart;renderPlayers();
             }
             function hostStart(){
